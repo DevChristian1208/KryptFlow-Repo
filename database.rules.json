@@ -1,0 +1,277 @@
+{
+  "rules": {
+    "newusers": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      },
+      ".indexOn": ["authUid", "newemail", "username"]
+    },
+
+    "usernames": {
+      "$username": {
+        ".read": true,
+        ".write": "auth != null && (!data.exists() || data.child('uid').val() === auth.uid) && (!newData.exists() || newData.child('uid').val() === auth.uid)",
+        ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'email']) && newData.child('uid').val() === auth.uid)"
+      }
+    },
+
+    "publicKeys": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "presence": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "rateLimits": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "lastMessageAt": {
+          ".write": "auth != null && auth.uid === $uid",
+          ".validate": "newData.val() <= now && (!data.exists() || newData.val() > data.val() + 400)"
+        },
+        "lastChannelCreateAt": {
+          ".write": "auth != null && auth.uid === $uid",
+          ".validate": "newData.val() <= now && (!data.exists() || newData.val() > data.val() + 5000)"
+        }
+      }
+    },
+
+    "servers": {
+      "$serverId": {
+        ".read": "auth != null && (!data.exists() || root.child('serverMembers').child($serverId).child(auth.uid).exists())",
+        ".write": "auth != null && (!data.exists() ? newData.child('ownerUid').val() === auth.uid : root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner')"
+      }
+    },
+
+    "serverMembers": {
+      "$serverId": {
+        ".read": "auth != null && root.child('serverMembers').child($serverId).child(auth.uid).exists()",
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": "auth != null && ((auth.uid === $uid && !data.exists() && newData.child('role').val() === 'owner' && root.child('servers').child($serverId).child('ownerUid').val() === auth.uid) || (auth.uid === $uid && !data.exists() && newData.child('role').val() === 'member') || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'admin')"
+        }
+      }
+    },
+
+    "userServers": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$serverId": {
+          ".write": "auth != null && (auth.uid === $uid || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'admin')"
+        }
+      }
+    },
+
+    "serverInvites": {
+      "$inviteCode": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('createdByUid').val() === auth.uid && (root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'admin')) || (data.exists() && (data.child('createdByUid').val() === auth.uid || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+        "useCount": {
+          ".write": "auth != null"
+        }
+      }
+    },
+
+    "serverDirectInvites": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$serverId": {
+          ".write": "auth != null && (auth.uid === $uid || root.child('serverMembers').child($serverId).child(auth.uid).exists())",
+          ".validate": "!newData.exists() || (newData.hasChildren(['serverId', 'serverName', 'byUid', 'byName', 'createdAt']) && newData.child('serverId').val() === $serverId)"
+        }
+      }
+    },
+
+    "channels": {
+      ".read": "auth != null",
+      "$channelId": {
+        ".write": "auth != null && ((!data.exists() && root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).exists()) || (data.exists() && (data.child('members').child(auth.uid).exists() || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+        "members": {
+          "$uid": {
+            ".write": "auth != null && ((auth.uid === $uid && root.child('channelInvites').child(auth.uid).child($channelId).exists()) || data.parent().child(auth.uid).exists() || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')"
+          }
+        }
+      }
+    },
+
+    "channelKeys": {
+      "$channelId": {
+        ".read": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())",
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())"
+        }
+      }
+    },
+
+    "channelKeyEpochs": {
+      "$channelId": {
+        ".read": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())",
+        "$epochId": {
+          ".write": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())",
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid"
+          }
+        }
+      }
+    },
+
+    "channelInvites": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$channelId": {
+          ".write": "auth != null && (auth.uid === $uid || root.child('channels').child($channelId).child('members').child(auth.uid).exists() || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')",
+          ".validate": "!newData.exists() || (newData.hasChildren(['channelId', 'channelName', 'byUid', 'byName', 'createdAt']) && newData.child('channelId').val() === $channelId)"
+        }
+      }
+    },
+
+    "friendRequests": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$fromUid": {
+          ".write": "auth != null && (auth.uid === $fromUid || auth.uid === $uid)",
+          ".validate": "!newData.exists() || (newData.hasChildren(['fromName', 'createdAt']) && $fromUid === auth.uid)"
+        }
+      }
+    },
+
+    "friends": {
+      "$uid": {
+        ".read": "auth != null",
+        "$otherUid": {
+          ".write": "auth != null && (auth.uid === $uid || auth.uid === $otherUid)"
+        }
+      }
+    },
+
+    "blocked": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$otherUid": {
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      }
+    },
+
+    "sessions": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$sessionId": {
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      }
+    },
+
+    "dmSessions": {
+      "$convId": {
+        "$periodId": {
+          ".read": "auth != null && $convId.contains(auth.uid)",
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && $convId.contains(auth.uid)"
+          }
+        }
+      }
+    },
+
+    "channelMessages": {
+      "$channelId": {
+        ".read": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists()))",
+        "$mid": {
+          ".write": "auth != null && (((root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())) && (!data.exists() || data.child('senderUid').val() === auth.uid)) || (data.exists() && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+          ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
+        }
+      }
+    },
+
+    "channelMessageReactions": {
+      "$channelId": {
+        "$mid": {
+          ".read": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists()))",
+          "$uid": {
+            ".write": "auth != null && ((auth.uid === $uid && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists()))) || (data.exists() && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+            ".validate": "newData.hasChildren(['ciphertext', 'iv', 'signature', 'createdAt'])"
+          }
+        }
+      }
+    },
+
+    "channelThreadReplies": {
+      "$channelId": {
+        "$parentId": {
+          ".read": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists()))",
+          "$rid": {
+            ".write": "auth != null && (((root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())) && (!data.exists() || data.child('senderUid').val() === auth.uid)) || (data.exists() && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+            ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
+          }
+        }
+      }
+    },
+
+    "channelMentions": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$mentionId": {
+          ".write": "auth != null && (auth.uid === $uid || (newData.exists() && newData.child('fromUid').val() === auth.uid))",
+          ".validate": "newData.hasChildren(['channelId', 'messageId', 'fromUid', 'createdAt', 'read'])"
+        }
+      }
+    },
+
+    "directMessages": {
+      "$convId": {
+        ".read": "auth != null && $convId.contains(auth.uid)",
+        "$mid": {
+          ".write": "auth != null && $convId.contains(auth.uid) && (!data.exists() || data.child('senderUid').val() === auth.uid)",
+          ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
+        }
+      }
+    },
+
+    "directMessageReactions": {
+      "$convId": {
+        "$mid": {
+          ".read": "auth != null && $convId.contains(auth.uid)",
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && $convId.contains(auth.uid)",
+            ".validate": "newData.hasChildren(['ciphertext', 'iv', 'signature', 'createdAt'])"
+          }
+        }
+      }
+    },
+
+    "directThreadReplies": {
+      "$convId": {
+        "$parentId": {
+          ".read": "auth != null && $convId.contains(auth.uid)",
+          "$rid": {
+            ".write": "auth != null && $convId.contains(auth.uid) && (!data.exists() || data.child('senderUid').val() === auth.uid)",
+            ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
+          }
+        }
+      }
+    },
+
+    "dmThreads": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$other": {
+          ".write": "auth != null && (auth.uid === $uid || auth.uid === $other)"
+        }
+      }
+    },
+
+    "workspace": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}
