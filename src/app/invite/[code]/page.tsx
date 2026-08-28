@@ -68,5 +68,3 @@ export default function InvitePage() {
     </div>
   );
 }
-
-export { PENDING_INVITE_KEY };
