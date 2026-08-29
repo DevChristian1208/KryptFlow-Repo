@@ -11,6 +11,7 @@ import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
 import { ref, get } from "firebase/database";
 import { auth, db } from "@/app/lib/firebase";
 import { ensureIdentityKeys } from "@/app/lib/crypto";
+import { ensureHomeServerBootstrapped } from "@/app/lib/homeServer";
 
 export type User = {
   id: string;
@@ -18,6 +19,7 @@ export type User = {
   email: string;
   avatar?: string;
   isGuest: boolean;
+  emailVerified?: boolean;
 };
 
 type UserContextType = {
@@ -44,6 +46,12 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
         try {
           await ensureIdentityKeys(authUser.uid);
+          // Best-effort, kein await nötig (blockiert das Laden des Nutzers
+          // nicht) — legt den HomeServer beim Login des designierten
+          // Owner-Accounts einmalig an, falls er noch nicht existiert.
+          ensureHomeServerBootstrapped(authUser.uid, authUser.email).catch((e) =>
+            console.error("[UserContext] HomeServer-Bootstrap fehlgeschlagen:", e)
+          );
 
           const newUserSnap = await get(ref(db, `newusers/${authUser.uid}`));
           if (newUserSnap.exists()) {
@@ -54,6 +62,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
               email: u.newemail || authUser.email || "",
               avatar: u.avatar || "/avatar1.png",
               isGuest: !!u.isGuest,
+              emailVerified: authUser.isAnonymous || authUser.emailVerified,
             };
 
             setUser(registeredUser);
@@ -72,6 +81,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
             email: authUser.email || "",
             avatar: "/avatar1.png",
             isGuest: authUser.isAnonymous,
+            emailVerified: authUser.isAnonymous || authUser.emailVerified,
           };
 
           setUser(fallbackUser);

@@ -51,6 +51,9 @@ export default function UserProfileDialog({
     { id: string; name: string; avatar?: string }[]
   >([]);
   const [pendingRequest, setPendingRequest] = useState(false);
+  const [mutualServers, setMutualServers] = useState<
+    { id: string; name: string; iconUrl?: string }[]
+  >([]);
   const [invitedServerIds, setInvitedServerIds] = useState<Set<string>>(new Set());
   const [statusDraft, setStatusDraft] = useState("");
   const [savingStatus, setSavingStatus] = useState(false);
@@ -70,10 +73,15 @@ export default function UserProfileDialog({
 
   useEffect(() => {
     if (!isOpen || !userId) return;
+    // Schutz vor Race: klickt man schnell hintereinander auf mehrere
+    // Profile, darf eine spät auflösende ältere Anfrage nicht die Anzeige
+    // des inzwischen geöffneten, neueren Profils überschreiben.
+    let cancelled = false;
     setLoading(true);
     (async () => {
       try {
         const profileSnap = await get(ref(db, `newusers/${userId}`));
+        if (cancelled) return;
         const p = (profileSnap.val() as NewUserDb | null) || null;
         setProfile(p);
         setStatusDraft(p?.status || "");
@@ -84,6 +92,7 @@ export default function UserProfileDialog({
             get(ref(db, `friends/${userId}`)),
             get(ref(db, `friendRequests/${userId}/${me.id}`)),
           ]);
+          if (cancelled) return;
           const myFriends = (mySnap.val() as Record<string, FriendEntry> | null) || {};
           const theirFriends =
             (theirSnap.val() as Record<string, FriendEntry> | null) || {};
@@ -99,18 +108,42 @@ export default function UserProfileDialog({
               avatar: myFriends[uid]?.avatar,
             }));
           setMutualFriends(mutual);
+
+          // Gemeinsame Server: da userServers/{fremde-uid} für uns nicht
+          // lesbar ist (Rule beschränkt auf auth.uid === $uid), stattdessen
+          // pro eigenem Server prüfen, ob userId dort auch Mitglied ist —
+          // serverMembers/{serverId} ist für alle Mitglieder dieses Servers
+          // lesbar, unabhängig von deren jeweiliger uid.
+          const memberChecks = await Promise.all(
+            servers.map((s) =>
+              get(ref(db, `serverMembers/${s.id}/${userId}`)).then((snap) => ({
+                server: s,
+                isMember: snap.exists(),
+              }))
+            )
+          );
+          if (cancelled) return;
+          setMutualServers(
+            memberChecks
+              .filter((r) => r.isMember)
+              .map((r) => ({ id: r.server.id, name: r.server.name, iconUrl: r.server.iconUrl }))
+          );
         } else {
           setFriendSince(null);
           setMutualFriends([]);
+          setMutualServers([]);
           setPendingRequest(false);
         }
       } catch (e) {
         console.error("[UserProfileDialog] Laden fehlgeschlagen:", e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, [isOpen, userId, me?.id, isSelf]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, userId, me?.id, isSelf, servers]);
 
   async function handleAddFriend() {
     if (!me?.id) return;
@@ -184,7 +217,7 @@ export default function UserProfileDialog({
       aria-modal="true"
       aria-label="Profil"
     >
-      <div className="modal-card w-full max-w-[420px] p-6 sm:p-8">
+      <div className="modal-card w-full max-w-[420px] max-h-[85vh] overflow-y-auto p-6 sm:p-8">
         <button
           onClick={onClose}
           className="btn-icon absolute top-5 right-5 w-9 h-9 text-[var(--foreground-secondary)]"
@@ -308,7 +341,7 @@ export default function UserProfileDialog({
                 </div>
 
                 {mutualFriends.length > 0 && (
-                  <div>
+                  <div className="mb-6">
                     <h3 className="text-sm font-semibold text-[var(--foreground-secondary)] uppercase tracking-wide mb-2">
                       Gemeinsame Freunde
                     </h3>
@@ -326,6 +359,40 @@ export default function UserProfileDialog({
                             className="rounded-full"
                           />
                           <span className="text-sm text-[var(--foreground)]">{f.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {mutualServers.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-[var(--foreground-secondary)] uppercase tracking-wide mb-2">
+                      Gemeinsame Server
+                    </h3>
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {mutualServers.map((s) => (
+                        <div
+                          key={s.id}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+                        >
+                          {s.iconUrl ? (
+                            <Image
+                              src={s.iconUrl}
+                              alt={s.name}
+                              width={24}
+                              height={24}
+                              className="rounded-full object-cover"
+                            />
+                          ) : (
+                            <div
+                              className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-semibold shrink-0"
+                              style={{ background: "linear-gradient(135deg, #0a84ff, #0058b8)" }}
+                            >
+                              {s.name.slice(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                          <span className="text-sm text-[var(--foreground)]">{s.name}</span>
                         </div>
                       ))}
                     </div>

@@ -47,6 +47,12 @@ export default function Register() {
       if (name.trim() !== "") {
         await updateProfile(cred.user, { displayName: name.trim() });
       }
+      // Bewusst KEIN automatischer Versand hier: die eingegebene Adresse ist
+      // zu diesem Zeitpunkt noch unbestätigt und könnte jemand anderem
+      // gehören — ungefragt eine E-Mail an eine fremde Adresse zu schicken
+      // wäre selbst ein Missbrauchsvektor. Der Versand passiert erst, wenn
+      // der Nutzer im Hinweis-Banner (EmailVerificationBanner.tsx) im
+      // Dashboard aktiv draufklickt.
 
       // Benutzername atomar beanspruchen (Firebase kennt keine Unique-
       // Constraints — die Transaction stellt sicher, dass zwei Leute nicht

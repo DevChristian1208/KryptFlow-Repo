@@ -17,6 +17,14 @@ type StoredIdentity = {
   ecdsaPublicKey: CryptoKey;
 };
 
+// Wird ausschließlich beim Neu-Erzeugen eines Schlüsselpaars vergeben (siehe
+// ensureIdentityKeys) und zusammen mit dem Public Key veröffentlicht. Erlaubt
+// anderen Clients zu erkennen, dass ein zuvor für diesen Nutzer gewrapptes
+// Channel-Key-Envelope nicht mehr zum AKTUELLEN Schlüsselpaar passt (z. B.
+// nach einem Origin-/Geräte-Wechsel ohne Schlüssel-Backup, siehe
+// ensureIdentityKeys-Kommentar) und es neu wrappen müssen, statt den
+// Nutzer dauerhaft mit einem unentschlüsselbaren Envelope hängen zu lassen.
+
 function openIdb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(IDB_NAME, 2);
@@ -115,17 +123,25 @@ function base64ToBuf(b64: string): ArrayBuffer {
 export type PublicIdentity = {
   ecdhPublicJwk: JsonWebKey;
   ecdsaPublicJwk: JsonWebKey;
+  keyVersion?: string;
 };
 
 async function generateIdentity(uid: string): Promise<StoredIdentity> {
+  // extractable: true (statt vorher false) ist eine bewusste Abschwächung,
+  // NUR um das optionale Schlüssel-Backup (siehe exportIdentityBackup unten)
+  // überhaupt zu ermöglichen — ohne exportierbare Keys ließe sich der
+  // private Schlüssel nie in ein Backup verpacken. Der zusätzliche Spielraum
+  // dadurch ist gering: eine erfolgreiche XSS-Lücke könnte ohnehin schon
+  // sämtliche gerade entschlüsselten Klartexte direkt aus dem DOM/State
+  // auslesen, unabhängig davon, ob der Schlüssel selbst exportierbar ist.
   const ecdhPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
-    false,
+    true,
     ["deriveKey"]
   );
   const ecdsaPair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
-    false,
+    true,
     ["sign", "verify"]
   );
 
@@ -162,7 +178,12 @@ export async function ensureIdentityKeys(uid: string): Promise<void> {
   if (justGenerated) {
     const ecdhPublicJwk = await crypto.subtle.exportKey("jwk", identity.ecdhPublicKey);
     const ecdsaPublicJwk = await crypto.subtle.exportKey("jwk", identity.ecdsaPublicKey);
-    await set(ref(db, `publicKeys/${uid}`), { ecdhPublicJwk, ecdsaPublicJwk });
+    const keyVersion = crypto.randomUUID();
+    await set(ref(db, `publicKeys/${uid}`), {
+      ecdhPublicJwk,
+      ecdsaPublicJwk,
+      keyVersion,
+    });
   }
 }
 
@@ -177,17 +198,190 @@ async function getOwnIdentity(uid: string): Promise<StoredIdentity> {
 }
 
 /* -----------------------------------------------------------
+ * Optionales, passphrase-verschlüsseltes Schlüssel-Backup — rein client-
+ * seitig: Firebase bekommt nie die Passphrase noch den Klartext-Schlüssel zu
+ * sehen, nur den PBKDF2-Salt und das AES-GCM-Chiffrat. Ohne dieses Backup
+ * gilt weiterhin "letztes Gerät gewinnt, alte Nachrichten unwiederbringlich
+ * weg" (siehe ensureIdentityKeys) — mit Backup kann dieselbe Identität
+ * (und damit der Zugriff auf alte, bereits gewrappte Channel-Keys sowie
+ * laufende DM-Ratchet-Perioden) auf einem neuen Gerät wiederhergestellt
+ * werden, wenn der Nutzer sich VORHER dafür entschieden hat, eins anzulegen.
+ * ---------------------------------------------------------*/
+
+export type KeyBackup = {
+  saltB64: string;
+  ivB64: string;
+  ciphertextB64: string;
+  iterations: number;
+  createdAt: number;
+};
+
+const BACKUP_PBKDF2_ITERATIONS = 250_000;
+
+async function deriveBackupKey(
+  passphrase: string,
+  salt: Uint8Array,
+  iterations: number
+): Promise<CryptoKey> {
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: bytesToBuf(salt), iterations, hash: "SHA-256" },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+/** Verschlüsselt die eigenen privaten Identitätsschlüssel mit einer vom
+ * Nutzer gewählten Passphrase. Wirft, wenn die lokale Identität (noch) mit
+ * extractable: false erzeugt wurde (Altbestand vor dieser Funktion) — in dem
+ * Fall ist kein Export möglich, ohne die Identität komplett neu zu erzeugen
+ * (was wiederum den bekannten "neues Gerät"-Reset auslösen würde). */
+export async function exportIdentityBackup(
+  uid: string,
+  passphrase: string
+): Promise<KeyBackup> {
+  if (passphrase.length < 8) {
+    throw new Error("Passphrase muss mindestens 8 Zeichen lang sein.");
+  }
+  const identity = await getOwnIdentity(uid);
+
+  let ecdhPrivateJwk: JsonWebKey;
+  let ecdsaPrivateJwk: JsonWebKey;
+  try {
+    [ecdhPrivateJwk, ecdsaPrivateJwk] = await Promise.all([
+      crypto.subtle.exportKey("jwk", identity.ecdhPrivateKey),
+      crypto.subtle.exportKey("jwk", identity.ecdsaPrivateKey),
+    ]);
+  } catch {
+    throw new Error(
+      "Diese Schlüssel wurden vor Einführung des Backups erzeugt und können nicht exportiert werden."
+    );
+  }
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveBackupKey(passphrase, salt, BACKUP_PBKDF2_ITERATIONS);
+
+  const plaintext = new TextEncoder().encode(
+    JSON.stringify({ ecdhPrivateJwk, ecdsaPrivateJwk })
+  );
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    plaintext
+  );
+
+  const backup: KeyBackup = {
+    saltB64: bufToBase64(salt.buffer),
+    ivB64: bufToBase64(iv.buffer),
+    ciphertextB64: bufToBase64(ciphertext),
+    iterations: BACKUP_PBKDF2_ITERATIONS,
+    createdAt: Date.now(),
+  };
+  await set(ref(db, `encryptedKeyBackup/${uid}`), backup);
+  return backup;
+}
+
+/** Stellt die Identität aus einem zuvor angelegten Backup wieder her und
+ * ersetzt damit die evtl. auf diesem Gerät bereits vorhandene lokale
+ * Identität. Bei falscher Passphrase schlägt die AES-GCM-Entschlüsselung
+ * mit einem OperationError fehl (Authentifizierungs-Tag passt nicht) —
+ * dasselbe Fehlerbild wie bei den anderen unwrap-Funktionen in dieser Datei. */
+export async function restoreIdentityBackup(
+  uid: string,
+  passphrase: string
+): Promise<void> {
+  const snap = await get(ref(db, `encryptedKeyBackup/${uid}`));
+  if (!snap.exists()) {
+    throw new Error("Für dieses Konto wurde noch kein Schlüssel-Backup angelegt.");
+  }
+  const backup = snap.val() as KeyBackup;
+
+  const salt = new Uint8Array(base64ToBuf(backup.saltB64));
+  const key = await deriveBackupKey(passphrase, salt, backup.iterations);
+
+  let plaintext: ArrayBuffer;
+  try {
+    plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64ToBuf(backup.ivB64) },
+      key,
+      base64ToBuf(backup.ciphertextB64)
+    );
+  } catch {
+    throw new Error("Falsche Passphrase.");
+  }
+
+  const { ecdhPrivateJwk, ecdsaPrivateJwk } = JSON.parse(
+    new TextDecoder().decode(plaintext)
+  ) as { ecdhPrivateJwk: JsonWebKey; ecdsaPrivateJwk: JsonWebKey };
+
+  // EC-Private-JWKs enthalten die öffentlichen Koordinaten (x/y) bereits mit
+  // — der Public Key lässt sich daraus ableiten, indem man dasselbe JWK ohne
+  // "d" (den privaten Skalar) als Public Key importiert, statt ihn separat
+  // mitspeichern zu müssen.
+  const ecdhPublicJwk: JsonWebKey = { ...ecdhPrivateJwk, d: undefined, key_ops: [] };
+  const ecdsaPublicJwk: JsonWebKey = { ...ecdsaPrivateJwk, d: undefined, key_ops: [] };
+
+  const [ecdhPrivateKey, ecdhPublicKey, ecdsaPrivateKey, ecdsaPublicKey] =
+    await Promise.all([
+      crypto.subtle.importKey(
+        "jwk",
+        ecdhPrivateJwk,
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveKey"]
+      ),
+      crypto.subtle.importKey(
+        "jwk",
+        ecdhPublicJwk,
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        []
+      ),
+      crypto.subtle.importKey(
+        "jwk",
+        ecdsaPrivateJwk,
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["sign"]
+      ),
+      crypto.subtle.importKey(
+        "jwk",
+        ecdsaPublicJwk,
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["verify"]
+      ),
+    ]);
+
+  await idbPut({ uid, ecdhPrivateKey, ecdhPublicKey, ecdsaPrivateKey, ecdsaPublicKey });
+}
+
+export async function hasKeyBackup(uid: string): Promise<boolean> {
+  const snap = await get(ref(db, `encryptedKeyBackup/${uid}`));
+  return snap.exists();
+}
+
+/* -----------------------------------------------------------
  * Public Keys anderer Nutzer laden (mit Cache)
  * ---------------------------------------------------------*/
 
 const publicKeyCache = new Map<
   string,
-  Promise<{ ecdh: CryptoKey; ecdsa: CryptoKey } | null>
+  Promise<{ ecdh: CryptoKey; ecdsa: CryptoKey; keyVersion?: string } | null>
 >();
 
 export function fetchPublicIdentity(
   uid: string
-): Promise<{ ecdh: CryptoKey; ecdsa: CryptoKey } | null> {
+): Promise<{ ecdh: CryptoKey; ecdsa: CryptoKey; keyVersion?: string } | null> {
   if (!publicKeyCache.has(uid)) {
     publicKeyCache.set(
       uid,
@@ -211,11 +405,22 @@ export function fetchPublicIdentity(
           ["verify"]
         );
 
-        return { ecdh, ecdsa };
+        return { ecdh, ecdsa, keyVersion: val.keyVersion };
       })()
     );
   }
   return publicKeyCache.get(uid)!;
+}
+
+/**
+ * Aktuelle Public-Key-Version eines Nutzers (siehe StoredIdentity-Kommentar
+ * zu keyVersion) — dient dem Erkennen veralteter Channel-Key-Envelopes in
+ * ensureUserInAllChannels, ohne dafür extra Firebase-Reads zu brauchen
+ * (nutzt denselben Cache wie fetchPublicIdentity).
+ */
+export async function getPublicKeyVersion(uid: string): Promise<string | undefined> {
+  const identity = await fetchPublicIdentity(uid);
+  return identity?.keyVersion;
 }
 
 /* -----------------------------------------------------------
@@ -728,6 +933,7 @@ export type ChannelKeyEnvelope = {
   ephemeralPublicJwk: JsonWebKey;
   wrappedKey: string;
   iv: string;
+  forKeyVersion?: string;
 };
 
 export async function generateChannelKey(): Promise<CryptoKey> {
@@ -776,6 +982,7 @@ export async function wrapChannelKeyForMember(
     ephemeralPublicJwk,
     wrappedKey: bufToBase64(wrapped),
     iv: bufToBase64(iv.buffer),
+    ...(member.keyVersion ? { forKeyVersion: member.keyVersion } : {}),
   };
 }
 

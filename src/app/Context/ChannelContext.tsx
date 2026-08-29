@@ -34,6 +34,7 @@ import {
   signText,
   verifyText,
   fetchPublicIdentity,
+  getPublicKeyVersion,
   epochIdForTimestamp,
   type ChannelKeyEnvelope,
   type EncryptedPayload,
@@ -142,6 +143,7 @@ type ChannelContextType = {
     restricted?: boolean
   ) => Promise<void>;
   setChannelRestricted: (channelId: string, restricted: boolean) => Promise<void>;
+  deleteChannel: (channelId: string) => Promise<void>;
   inviteToChannel: (channelId: string, channelName: string, targetUid: string) => Promise<void>;
   sendMessage: (text: string, mentionedUids?: string[]) => Promise<void>;
   editMessage: (messageId: string, newText: string) => Promise<void>;
@@ -351,7 +353,14 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         channelKeyCache.current.set(channelId, key);
         return key;
       } catch (e) {
-        console.error("[ChannelContext] Channel-Key konnte nicht entpackt werden:", e);
+        // Erwartbar (kein Bug): nach einem Origin-/Geräte-Wechsel ohne
+        // Schlüssel-Backup kann das eigene Gerät den EIGENEN alten Legacy-Key
+        // nicht mehr entschlüsseln — Selbstheilung ist hier unmöglich (siehe
+        // keyVersion-Reparatur oben), nur ein anderes, noch gültiges
+        // Mitglied kann den Envelope neu wrappen. Kein console.error, damit
+        // dieser für den Nutzer nicht reparierbare Fall nicht wie ein Absturz
+        // aussieht.
+        console.debug("[ChannelContext] Eigener Legacy-Channel-Key nicht entschlüsselbar (vermutlich alter Schlüssel vor Geräte-/Origin-Wechsel):", e);
         return null;
       }
     },
@@ -375,7 +384,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         channelEpochKeyCache.current.set(cacheKey, key);
         return key;
       } catch (e) {
-        console.error("[ChannelContext] Epochen-Key konnte nicht entpackt werden:", e);
+        console.debug("[ChannelContext] Eigener Epochen-Key nicht entschlüsselbar (vermutlich alter Schlüssel vor Geräte-/Origin-Wechsel):", e);
         return null;
       }
     },
@@ -460,7 +469,14 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
           const existingKeys =
             (keysSnap.val() as Record<string, ChannelKeyEnvelope> | null) || {};
           for (const uid of memberUids) {
-            if (existingKeys[uid]) continue;
+            const existing = existingKeys[uid];
+            // Nicht nur "fehlt komplett", sondern auch "ist für ein
+            // inzwischen ersetztes Schlüsselpaar gewrappt" nachliefern —
+            // sonst bleibt ein Mitglied nach einem Origin-/Geräte-Wechsel
+            // (neues Schlüsselpaar, siehe ensureIdentityKeys) dauerhaft mit
+            // einem für sich selbst unentschlüsselbaren Envelope stehen.
+            const currentVersion = await getPublicKeyVersion(uid);
+            if (existing && existing.forKeyVersion === currentVersion) continue;
             const envelope = await wrapChannelKeyForMember(channelKey, uid);
             if (envelope) {
               await set(ref(db, `channelKeys/${cid}/${uid}`), envelope);
@@ -489,7 +505,9 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
           }
 
           for (const uid of memberUids) {
-            if (envelopes[uid]) continue;
+            const existing = envelopes[uid];
+            const currentVersion = await getPublicKeyVersion(uid);
+            if (existing && existing.forKeyVersion === currentVersion) continue;
             const envelope = await wrapChannelKeyForMember(epochKey, uid);
             if (envelope) {
               await set(ref(db, `channelKeyEpochs/${cid}/${epochId}/${uid}`), envelope);
@@ -574,6 +592,22 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     });
     return () => unsub();
   }, [authReady, user?.id, ensureUserInAllChannels]);
+
+  // Tritt jemand einem Server bei (nicht-eingeschränkte Kanäle: Zugriff
+  // ergibt sich allein aus der Server-Mitgliedschaft), ändert sich dabei nur
+  // serverMembers/userServers — NICHT channels. Ohne diesen zusätzlichen
+  // Listener würden bereits geöffnete, andere Mitglieder das neue Mitglied
+  // nie bemerken und ihm keinen Channel-Key-Envelope nachliefern, bis
+  // zufällig mal etwas an channels selbst geändert wird oder sie neu laden.
+  useEffect(() => {
+    if (!authReady || !user?.id || servers.length === 0) return;
+    const unsubs = servers.map((s) =>
+      onValue(ref(db, `serverMembers/${s.id}`), () => {
+        ensureUserInAllChannels();
+      })
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [authReady, user?.id, servers, ensureUserInAllChannels]);
 
   // ---------------------------------------------------
   // CHANNELS LADEN
@@ -1144,6 +1178,30 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // ---------------------------------------------------
+  // KANAL LÖSCHEN (Owner/Admin) — erst die Blätter (Nachrichten/Schlüssel),
+  // dann den Kanal selbst, in getrennten Aufrufen: channelKeys/-Epochs' Rule
+  // liest channels/{id}.serverId, das darf im selben Mehrfach-
+  // Schreibvorgang, in dem channels/{id} mitgelöscht würde, nicht schon weg
+  // sein (Cross-Path-Problem, siehe deleteServer in ServerContext.tsx).
+  // ---------------------------------------------------
+  const deleteChannel = async (channelId: string) => {
+    try {
+      await update(ref(db), {
+        [`channelMessages/${channelId}`]: null,
+        [`channelMessageReactions/${channelId}`]: null,
+        [`channelThreadReplies/${channelId}`]: null,
+        [`channelKeys/${channelId}`]: null,
+        [`channelKeyEpochs/${channelId}`]: null,
+      });
+      await update(ref(db), { [`channels/${channelId}`]: null });
+      if (activeChannelId === channelId) setActiveChannelId(null);
+    } catch (e) {
+      console.error("[ChannelContext] deleteChannel fehlgeschlagen:", e);
+      throw new Error("Kanal konnte nicht gelöscht werden.");
+    }
+  };
+
   return (
     <ChannelContext.Provider
       value={{
@@ -1159,6 +1217,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         createChannel,
         inviteToChannel,
         setChannelRestricted,
+        deleteChannel,
         sendMessage,
         editMessage,
         deleteMessage,

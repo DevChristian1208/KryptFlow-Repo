@@ -1,5 +1,14 @@
 {
   "rules": {
+    "rateLimits": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$action": {
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      }
+    },
+
     "newusers": {
       ".read": "auth != null",
       "$uid": {
@@ -20,6 +29,23 @@
       ".read": "auth != null",
       "$uid": {
         ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "encryptedKeyBackup": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "securityLog": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".indexOn": ["createdAt"],
+        "$eventId": {
+          ".write": "auth != null && auth.uid === $uid && !data.exists()"
+        }
       }
     },
 
@@ -47,7 +73,7 @@
     "servers": {
       "$serverId": {
         ".read": "auth != null && (!data.exists() || root.child('serverMembers').child($serverId).child(auth.uid).exists())",
-        ".write": "auth != null && (!data.exists() ? newData.child('ownerUid').val() === auth.uid : root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner')"
+        ".write": "auth != null && (!data.exists() ? (newData.child('ownerUid').val() === auth.uid && (!root.child('rateLimits').child(auth.uid).child('createServer').exists() || now - root.child('rateLimits').child(auth.uid).child('createServer').val() > 30000)) : root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner')"
       }
     },
 
@@ -56,7 +82,7 @@
         ".read": "auth != null && root.child('serverMembers').child($serverId).child(auth.uid).exists()",
         "$uid": {
           ".read": "auth != null && auth.uid === $uid",
-          ".write": "auth != null && ((auth.uid === $uid && !data.exists() && newData.child('role').val() === 'owner' && root.child('servers').child($serverId).child('ownerUid').val() === auth.uid) || (auth.uid === $uid && !data.exists() && newData.child('role').val() === 'member') || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'admin')"
+          ".write": "auth != null && ((auth.uid === $uid && !data.exists() && newData.child('role').val() === 'owner' && root.child('servers').child($serverId).child('ownerUid').val() === auth.uid) || (auth.uid === $uid && !data.exists() && newData.child('role').val() === 'member' && (!root.child('rateLimits').child(auth.uid).child('joinServer').exists() || now - root.child('rateLimits').child(auth.uid).child('joinServer').val() > 3000)) || (auth.uid === $uid && data.exists() && !newData.exists() && data.child('role').val() !== 'owner') || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'admin')"
         }
       }
     },
@@ -73,7 +99,7 @@
     "serverInvites": {
       "$inviteCode": {
         ".read": "auth != null",
-        ".write": "auth != null && ((!data.exists() && newData.child('createdByUid').val() === auth.uid && (root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'admin')) || (data.exists() && (data.child('createdByUid').val() === auth.uid || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+        ".write": "auth != null && ((!data.exists() && newData.child('createdByUid').val() === auth.uid && (root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'admin') && (!root.child('rateLimits').child(auth.uid).child('createInvite').exists() || now - root.child('rateLimits').child(auth.uid).child('createInvite').val() > 5000)) || (data.exists() && (data.child('createdByUid').val() === auth.uid || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
         "useCount": {
           ".write": "auth != null"
         }

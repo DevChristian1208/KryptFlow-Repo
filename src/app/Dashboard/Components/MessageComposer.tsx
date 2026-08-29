@@ -55,6 +55,25 @@ export default function MessageComposer({
 
   const canSend = !disabled && !sending && !cooldown && value.trim().length > 0;
 
+  const TEXTAREA_MIN_HEIGHT = 36;
+  const TEXTAREA_MAX_HEIGHT = 160;
+
+  // Textarea wächst mit dem Inhalt mit, statt bei fester Höhe intern zu
+  // scrollen (kaum sichtbar/bedienbar) — bis zur bestehenden max-h-Grenze,
+  // danach übernimmt der reguläre Scroll innerhalb des Felds. Erst auf die
+  // Mindesthöhe zurücksetzen (statt "auto"), bevor scrollHeight gemessen
+  // wird — sonst fällt die Leerzustand-Höhe je nach Zeilenhöhe/Padding
+  // größer aus als die alte feste Höhe (h-9/h-10) und wirkt "zu groß".
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
+    el.style.height = `${Math.max(
+      TEXTAREA_MIN_HEIGHT,
+      Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT)
+    )}px`;
+  }, [value]);
+
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!showEmoji) return;
@@ -227,7 +246,8 @@ export default function MessageComposer({
       <div className="relative flex-1">
         <textarea
           ref={textareaRef}
-          className="w-full h-10 md:h-9 max-h-[160px] resize-none outline-none text-[14px] md:text-[15px] leading-[1.4] py-2 bg-transparent text-[var(--foreground)] placeholder:text-[var(--foreground-secondary)]"
+          className="w-full max-h-[160px] resize-none outline-none overflow-y-auto text-[14px] md:text-[15px] leading-[1.4] py-2 bg-transparent text-[var(--foreground)] placeholder:text-[var(--foreground-secondary)]"
+          rows={1}
           placeholder={placeholder || "Nachricht schreiben…"}
           value={value}
           onChange={handleChange}

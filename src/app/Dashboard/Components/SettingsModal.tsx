@@ -28,6 +28,13 @@ import { useToast } from "@/app/Context/ToastContext";
 import { useUser } from "@/app/Context/UserContext";
 import { useSession } from "@/app/Context/SessionContext";
 import { uploadImage, ImageValidationError } from "@/app/lib/uploadImage";
+import { exportIdentityBackup, restoreIdentityBackup } from "@/app/lib/crypto";
+import {
+  logSecurityEvent,
+  getRecentSecurityEvents,
+  labelForSecurityEvent,
+  type SecurityEvent,
+} from "@/app/lib/securityLog";
 import DeleteAccountModal from "./DeleteAccountModal";
 
 const PRESET_AVATARS = [
@@ -52,6 +59,10 @@ function humanizeAuthError(err: unknown): string {
     "auth/requires-recent-login":
       "Aus Sicherheitsgründen bitte aus- und wieder einloggen und erneut versuchen.",
     "auth/invalid-verification-code": "Der eingegebene Code ist falsch.",
+    "auth/too-many-requests":
+      "Zu viele Versuche. Bitte kurz warten und erneut versuchen.",
+    "auth/network-request-failed":
+      "Netzwerkfehler. Prüfe deine Internetverbindung.",
   };
   return (code && map[code]) || "Vorgang fehlgeschlagen. Bitte erneut versuchen.";
 }
@@ -157,7 +168,7 @@ export default function SettingsModal({
         aria-modal="true"
         aria-label="Einstellungen"
       >
-        <div className="modal-card w-full max-w-[640px] p-6 sm:p-8">
+        <div className="modal-card w-full max-w-[640px] max-h-[85vh] overflow-y-auto p-6 sm:p-8">
           <button
             onClick={onClose}
             className="btn-icon absolute top-5 right-5 w-9 h-9 text-[var(--foreground-secondary)]"
@@ -344,6 +355,7 @@ function SecurityTab() {
         EmailAuthProvider.credential(current.email, currentPassword)
       );
       await updatePassword(current, newPassword);
+      if (user?.id) logSecurityEvent(user.id, "password_changed");
       showToast("Passwort geändert.", "success");
       setCurrentPassword("");
       setNewPassword("");
@@ -402,6 +414,7 @@ function SecurityTab() {
       setMfaSecret(null);
       setMfaQrDataUrl("");
       setMfaCode("");
+      if (user?.id) logSecurityEvent(user.id, "mfa_enabled");
       showToast("Zwei-Faktor-Authentifizierung aktiviert.", "success");
     } catch (err) {
       showToast(humanizeAuthError(err), "error");
@@ -417,6 +430,7 @@ function SecurityTab() {
     try {
       await multiFactor(current).unenroll(enrolledFactors[0]);
       setEnrolledFactors([]);
+      if (user?.id) logSecurityEvent(user.id, "mfa_disabled");
       showToast("Zwei-Faktor-Authentifizierung deaktiviert.", "success");
     } catch (err) {
       showToast(humanizeAuthError(err), "error");
@@ -591,6 +605,227 @@ function SecurityTab() {
           </div>
         )}
       </div>
+
+      <KeyBackupSection />
+      <SecurityLogSection />
+    </div>
+  );
+}
+
+/* -----------------------------------------------------------
+ * SICHERHEIT: Aktivitätsprotokoll (nur für den eigenen Account einsehbar)
+ * ---------------------------------------------------------*/
+function SecurityLogSection() {
+  const { user } = useUser();
+  const [events, setEvents] = useState<(SecurityEvent & { id: string })[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    getRecentSecurityEvents(user.id)
+      .then((list) => {
+        if (!cancelled) setEvents(list);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  if (!user?.id || user.isGuest) return null;
+
+  return (
+    <div className="pt-6 border-t border-[var(--border-subtle)]">
+      <h3 className="text-sm font-semibold text-[var(--foreground-secondary)] uppercase tracking-wide mb-2">
+        Aktivitätsprotokoll
+      </h3>
+      <p className="text-xs text-[var(--foreground-secondary)] mb-3">
+        Sicherheitsrelevante Aktionen auf diesem Konto — findest du hier etwas,
+        das nicht von dir war, ändere umgehend dein Passwort.
+      </p>
+      {loading ? (
+        <p className="text-sm text-[var(--foreground-secondary)]">Lädt…</p>
+      ) : events.length === 0 ? (
+        <p className="text-sm text-[var(--foreground-secondary)]">
+          Noch keine Einträge.
+        </p>
+      ) : (
+        <div className="space-y-1 max-h-56 overflow-y-auto">
+          {events.map((e) => (
+            <div
+              key={e.id}
+              className="flex items-center justify-between px-2 py-1.5 rounded-lg text-sm"
+            >
+              <span className="text-[var(--foreground)]">
+                {labelForSecurityEvent(e.type)}
+                {e.detail ? ` · ${e.detail}` : ""}
+              </span>
+              <span className="text-xs text-[var(--foreground-secondary)] shrink-0 ml-3">
+                {new Date(e.createdAt).toLocaleString("de-DE", {
+                  day: "2-digit",
+                  month: "2-digit",
+                  year: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -----------------------------------------------------------
+ * SICHERHEIT: Schlüssel-Backup (optional, passphrase-verschlüsselt)
+ * ---------------------------------------------------------*/
+function KeyBackupSection() {
+  const { user } = useUser();
+  const { showToast } = useToast();
+  const [mode, setMode] = useState<"idle" | "create" | "restore">("idle");
+  const [passphrase, setPassphrase] = useState("");
+  const [confirmPassphrase, setConfirmPassphrase] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!user?.id || user.isGuest) return null;
+
+  function reset() {
+    setMode("idle");
+    setPassphrase("");
+    setConfirmPassphrase("");
+  }
+
+  async function handleCreate() {
+    if (!user?.id || busy) return;
+    if (passphrase !== confirmPassphrase) {
+      showToast("Die Passphrasen stimmen nicht überein.", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await exportIdentityBackup(user.id, passphrase);
+      logSecurityEvent(user.id, "key_backup_created");
+      showToast(
+        "Backup erstellt. Merke dir die Passphrase gut — ohne sie ist das Backup nutzlos, Cryptflow kennt sie nicht.",
+        "success"
+      );
+      reset();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Backup fehlgeschlagen.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRestore() {
+    if (!user?.id || busy) return;
+    setBusy(true);
+    try {
+      await restoreIdentityBackup(user.id, passphrase);
+      logSecurityEvent(user.id, "key_backup_restored");
+      showToast(
+        "Schlüssel wiederhergestellt. Bitte lade die Seite neu, damit alles greift.",
+        "success"
+      );
+      reset();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Wiederherstellen fehlgeschlagen.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="pt-6 border-t border-[var(--border-subtle)]">
+      <h3 className="text-sm font-semibold text-[var(--foreground-secondary)] uppercase tracking-wide mb-2">
+        Schlüssel-Backup
+      </h3>
+      <p className="text-xs text-[var(--foreground-secondary)] mb-3">
+        Optional: verschlüssele deine privaten Schlüssel mit einer Passphrase
+        und lege sie ab, um sie auf einem neuen Gerät wiederherzustellen —
+        sonst gilt weiterhin: neues Gerät = neue Identität, alte Nachrichten
+        nicht mehr lesbar. Die Passphrase verlässt nie diesen Browser.
+      </p>
+
+      {mode === "idle" && (
+        <div className="flex gap-2">
+          <button onClick={() => setMode("create")} className="btn-secondary text-sm">
+            Backup erstellen
+          </button>
+          <button onClick={() => setMode("restore")} className="btn-secondary text-sm">
+            Aus Backup wiederherstellen
+          </button>
+        </div>
+      )}
+
+      {mode === "create" && (
+        <div className="space-y-2 max-w-xs">
+          <div className="input-pill">
+            <input
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              type="password"
+              placeholder="Passphrase (mind. 8 Zeichen)"
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="input-pill">
+            <input
+              value={confirmPassphrase}
+              onChange={(e) => setConfirmPassphrase(e.target.value)}
+              type="password"
+              placeholder="Passphrase bestätigen"
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={reset} className="btn-secondary text-sm">
+              Abbrechen
+            </button>
+            <button
+              onClick={handleCreate}
+              disabled={busy || passphrase.length < 8}
+              className="btn-primary text-sm"
+            >
+              {busy ? "Erstellt…" : "Backup erstellen"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === "restore" && (
+        <div className="space-y-2 max-w-xs">
+          <p className="text-xs text-[var(--danger)]">
+            Ersetzt die Schlüssel auf diesem Gerät durch die aus dem Backup.
+          </p>
+          <div className="input-pill">
+            <input
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              type="password"
+              placeholder="Passphrase"
+              autoComplete="current-password"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={reset} className="btn-secondary text-sm">
+              Abbrechen
+            </button>
+            <button
+              onClick={handleRestore}
+              disabled={busy || !passphrase}
+              className="btn-primary text-sm"
+            >
+              {busy ? "Stellt wieder her…" : "Wiederherstellen"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -661,6 +896,7 @@ function UsernameSection() {
       }
       setCurrentUsername(clean);
       setNewUsername("");
+      logSecurityEvent(user.id, "username_changed", clean);
       showToast("Benutzername geändert.", "success");
     } catch (err) {
       console.error("[SettingsModal] Benutzername ändern fehlgeschlagen:", err);

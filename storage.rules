@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// Bisher nirgends im Repo versioniert — lief entweder auf den (meist offenen)
+// Firebase-Default-Regeln oder auf einem nicht nachvollziehbaren Stand direkt
+// in der Console. Ab jetzt Teil des Repos wie database.rules.json.
+//
+// Pfad-Konvention (siehe src/app/lib/uploadImage.ts und dessen Aufrufer):
+// jede hochgeladene Datei liegt flach unter avatars/ bzw. serverIcons/ mit
+// einem Dateinamen, der IMMER mit "<eigene uid>_" beginnt (z. B.
+// avatars/abc123_1735000000000) — keine echten Unterordner pro Nutzer.
+// Storage-Regeln matchen nur ganze Pfadsegmente, daher wird die eigene uid
+// hier per Regex-Präfix auf dem Dateinamen statt per Pfad-Wildcard geprüft.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /avatars/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && fileName.matches(request.auth.uid + '_.*')
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /serverIcons/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && fileName.matches(request.auth.uid + '_.*')
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /serverBanners/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && fileName.matches(request.auth.uid + '_.*')
+        && request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Alles andere: kein bekannter Anwendungsfall, standardmäßig verboten.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

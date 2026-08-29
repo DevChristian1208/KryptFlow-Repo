@@ -152,7 +152,7 @@ export default function Sidebar({
         />
       )}
 
-      <div className="panel-surface h-full flex items-stretch overflow-hidden">
+      <div className="panel-surface max-lg:bg-[var(--surface)] max-lg:backdrop-blur-xl max-lg:backdrop-saturate-150 h-full flex items-stretch overflow-hidden">
         <ServerRail sidebarOpen={open} onToggleSidebar={onToggleSidebar} />
 
         {open && <div className="w-px shrink-0 bg-[var(--border-subtle)]" />}
@@ -167,22 +167,38 @@ export default function Sidebar({
         >
           {open && (
             <>
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2 min-w-0">
+              <div
+                className={`flex items-center justify-between mb-6 rounded-xl ${
+                  activeServer?.bannerUrl ? "relative bg-cover bg-center p-3 -mx-1 overflow-hidden" : ""
+                }`}
+                style={
+                  activeServer?.bannerUrl
+                    ? { backgroundImage: `url(${activeServer.bannerUrl})` }
+                    : undefined
+                }
+              >
+                {activeServer?.bannerUrl && (
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-black/10" />
+                )}
+                <div className="relative flex items-center gap-2 min-w-0">
                   <Image
                     src="/Logo.svg"
                     alt="Server"
                     width={48}
                     height={48}
                   />
-                  <h2 className="text-xl font-bold truncate text-[var(--foreground)]">
+                  <h2
+                    className={`text-xl font-bold truncate ${
+                      activeServer?.bannerUrl ? "text-white" : "text-[var(--foreground)]"
+                    }`}
+                  >
                     {activeServer?.name || "Kein Server"}
                   </h2>
                 </div>
 
                 {!user?.isGuest && activeServer && (
                   <button
-                    className="btn-icon w-8 h-8"
+                    className={`relative btn-icon w-8 h-8 ${activeServer.bannerUrl ? "text-white hover:bg-white/20" : ""}`}
                     aria-label="Server-Einstellungen"
                     onClick={() => setServerSettingsOpen(true)}
                   >
@@ -191,6 +207,7 @@ export default function Sidebar({
                 )}
               </div>
 
+              <div className="flex-1 min-h-0 overflow-y-auto">
               <div
                 role="button"
                 tabIndex={0}
@@ -229,8 +246,8 @@ export default function Sidebar({
                   channelsOpen ? "opacity-100" : "opacity-0"
                 }`}
                 style={{
-                  maxHeight: channelsOpen ? 500 : 0,
-                  overflow: "hidden",
+                  maxHeight: channelsOpen ? 2000 : 0,
+                  overflow: channelsOpen ? "visible" : "hidden",
                 }}
               >
                 {channels.map((c) => {
@@ -297,8 +314,8 @@ export default function Sidebar({
                       friendsOpen ? "opacity-100" : "opacity-0"
                     }`}
                     style={{
-                      maxHeight: friendsOpen ? 500 : 0,
-                      overflow: "hidden",
+                      maxHeight: friendsOpen ? 2000 : 0,
+                      overflow: friendsOpen ? "visible" : "hidden",
                     }}
                   >
                     {friends.map((f) => (
@@ -368,8 +385,8 @@ export default function Sidebar({
                       dmsOpen ? "opacity-100" : "opacity-0"
                     }`}
                     style={{
-                      maxHeight: dmsOpen ? 500 : 0,
-                      overflow: "hidden",
+                      maxHeight: dmsOpen ? 2000 : 0,
+                      overflow: dmsOpen ? "visible" : "hidden",
                     }}
                   >
                     {dmThreads.map((t) => {
@@ -419,6 +436,7 @@ export default function Sidebar({
                   </ul>
                 </>
               )}
+              </div>
             </>
           )}
         </aside>

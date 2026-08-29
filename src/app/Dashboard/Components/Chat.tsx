@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Header from "./Header";
 import Sidebar from "./Sidebar";
 import ChatWindow from "./ChatWindow";
+import EmailVerificationBanner from "./EmailVerificationBanner";
 
 export default function ChatApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -21,6 +22,7 @@ export default function ChatApp() {
   return (
     <div className="h-screen bg-[var(--background)] flex flex-col">
       <Header onToggleHeader={() => setSidebarOpen((prev) => !prev)} />
+      <EmailVerificationBanner />
       <div
         className={`flex flex-1 min-h-0 pt-4 md:pt-[30px] pb-5 items-stretch gap-3 transition-[gap] duration-300 ease-in-out ${
           sidebarOpen ? "md:gap-[20px]" : "md:gap-0"

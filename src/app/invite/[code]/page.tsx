@@ -32,8 +32,12 @@ export default function InvitePage() {
 
     (async () => {
       try {
-        await joinServerByInviteCode(params.code);
-        router.replace("/Dashboard");
+        const joined = await joinServerByInviteCode(params.code);
+        if (joined) {
+          router.replace("/Dashboard");
+        } else {
+          setStatus("error");
+        }
       } catch {
         setStatus("error");
       }

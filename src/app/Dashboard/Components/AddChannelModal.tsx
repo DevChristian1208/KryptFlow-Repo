@@ -48,7 +48,7 @@ export default function AddChannelModal({
       aria-modal="true"
       aria-label="Channel erstellen"
     >
-      <div className="modal-card w-full max-w-[872px] p-6 sm:p-8">
+      <div className="modal-card w-full max-w-[872px] max-h-[85vh] overflow-y-auto p-6 sm:p-8">
         <button
           onClick={onClose}
           className="btn-icon absolute top-5 right-5 w-9 h-9 text-[var(--foreground-secondary)]"

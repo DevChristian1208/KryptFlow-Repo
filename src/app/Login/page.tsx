@@ -20,6 +20,7 @@ import {
 } from "firebase/auth";
 import { auth, db } from "@/app/lib/firebase";
 import { ref, get, query, orderByChild, equalTo } from "firebase/database";
+import { logSecurityEvent } from "@/app/lib/securityLog";
 import { FirebaseError } from "firebase/app";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 
@@ -103,7 +104,9 @@ export default function Login() {
       email: finalEmail,
       avatar: finalAvatar,
       isGuest: false,
+      emailVerified: cred.user.emailVerified,
     });
+    logSecurityEvent(uid, "login");
 
     if (data) {
       // Ausstehenden Server-Einladungslink (Klick auf /invite/... während

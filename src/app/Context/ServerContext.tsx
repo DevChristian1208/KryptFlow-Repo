@@ -20,6 +20,7 @@ import {
 import { db } from "@/app/lib/firebase";
 import { useUser } from "./UserContext";
 import { useToast } from "./ToastContext";
+import { logSecurityEvent } from "@/app/lib/securityLog";
 
 export type ServerRole = "owner" | "admin" | "member";
 
@@ -27,6 +28,7 @@ export type Server = {
   id: string;
   name: string;
   iconUrl?: string;
+  bannerUrl?: string;
   ownerUid: string;
   createdAt: number;
   myRole: ServerRole;
@@ -35,6 +37,7 @@ export type Server = {
 type ServerDb = {
   name?: string;
   iconUrl?: string;
+  bannerUrl?: string;
   ownerUid?: string;
   createdAt?: number;
 };
@@ -58,13 +61,15 @@ type ServerContextType = {
     serverId: string,
     opts?: { expiresInMs?: number; maxUses?: number }
   ) => Promise<string>;
-  joinServerByInviteCode: (code: string, uidOverride?: string) => Promise<void>;
+  joinServerByInviteCode: (code: string, uidOverride?: string) => Promise<boolean>;
   inviteUserToServer: (
     serverId: string,
     serverName: string,
     targetUid: string
   ) => Promise<void>;
   renameServer: (serverId: string, name: string) => Promise<void>;
+  updateServerBanner: (serverId: string, bannerUrl: string) => Promise<void>;
+  updateServerIcon: (serverId: string, iconUrl: string) => Promise<void>;
   deleteServer: (serverId: string) => Promise<void>;
   updateMemberRole: (
     serverId: string,
@@ -72,6 +77,7 @@ type ServerContextType = {
     role: ServerRole
   ) => Promise<void>;
   removeMember: (serverId: string, uid: string) => Promise<void>;
+  leaveServer: (serverId: string) => Promise<void>;
   loading: boolean;
 };
 
@@ -114,6 +120,7 @@ export function ServerProvider({ children }: { children: ReactNode }) {
               id,
               name: s.name || "Unbenannter Server",
               iconUrl: s.iconUrl,
+              bannerUrl: s.bannerUrl,
               ownerUid: s.ownerUid || "",
               createdAt: s.createdAt || 0,
               myRole: role,
@@ -164,10 +171,18 @@ export function ServerProvider({ children }: { children: ReactNode }) {
           },
           [`userServers/${user.id}/${serverId}`]: true,
         });
+        // Rate-Limit-Zeitstempel erst NACH der eigentlichen Aktion und in
+        // einem eigenen Aufruf setzen — die servers/{id}-Regel liest diesen
+        // Pfad, ein gleichzeitiges Schreiben im selben Mehrfach-
+        // Schreibvorgang wäre wieder das Cross-Path-Problem.
+        update(ref(db), { [`rateLimits/${user.id}/createServer`]: createdAt }).catch(() => {});
         setActiveServerId(serverId);
         return serverId;
       } catch (e) {
         console.error("[ServerContext] createServer fehlgeschlagen:", e);
+        if (e instanceof Error && /permission_denied/i.test(e.message)) {
+          throw new Error("Bitte kurz warten, bevor du einen weiteren Server erstellst.");
+        }
         throw new Error("Server konnte nicht erstellt werden.");
       } finally {
         setLoading(false);
@@ -193,9 +208,13 @@ export function ServerProvider({ children }: { children: ReactNode }) {
       };
       try {
         await set(ref(db, `serverInvites/${code}`), invite);
+        update(ref(db), { [`rateLimits/${user.id}/createInvite`]: Date.now() }).catch(() => {});
         return code;
       } catch (e) {
         console.error("[ServerContext] createInvite fehlgeschlagen:", e);
+        if (e instanceof Error && /permission_denied/i.test(e.message)) {
+          throw new Error("Bitte kurz warten, bevor du einen weiteren Einladungslink erstellst.");
+        }
         throw new Error("Einladungslink konnte nicht erstellt werden.");
       }
     },
@@ -203,7 +222,7 @@ export function ServerProvider({ children }: { children: ReactNode }) {
   );
 
   const joinServerByInviteCode = useCallback(
-    async (code: string, uidOverride?: string): Promise<void> => {
+    async (code: string, uidOverride?: string): Promise<boolean> => {
       // uidOverride erlaubt den Aufruf direkt nach dem Login (Login/page.tsx):
       // dort ist setUser(...) zwar schon aufgerufen, aber der React-State
       // (und damit user.id in diesem Closure) aktualisiert sich erst beim
@@ -214,19 +233,24 @@ export function ServerProvider({ children }: { children: ReactNode }) {
       if (!uid) throw new Error("Nicht eingeloggt.");
       const cleanCode = code.trim().split("/").pop() || code.trim();
 
+      // Rückgabewert (statt nur Toast + return) nötig, damit Aufrufer
+      // (invite/[code]/page.tsx, CreateOrJoinServerModal.tsx) einen
+      // ungültigen/abgelaufenen/aufgebrauchten Link nicht fälschlich als
+      // Erfolg behandeln (z. B. Weiterleitung ins Dashboard oder Schließen
+      // des Modals, obwohl gar kein Beitritt stattgefunden hat).
       const snap = await get(ref(db, `serverInvites/${cleanCode}`));
       if (!snap.exists()) {
         showToast("Dieser Einladungslink ist ungültig.", "error");
-        return;
+        return false;
       }
       const invite = snap.val() as ServerInviteDb;
       if (invite.expiresAt && Date.now() > invite.expiresAt) {
         showToast("Dieser Einladungslink ist abgelaufen.", "error");
-        return;
+        return false;
       }
       if (invite.maxUses && (invite.useCount || 0) >= invite.maxUses) {
         showToast("Dieser Einladungslink wurde bereits zu oft verwendet.", "error");
-        return;
+        return false;
       }
 
       const alreadyMember = await get(
@@ -235,7 +259,7 @@ export function ServerProvider({ children }: { children: ReactNode }) {
       if (alreadyMember.exists()) {
         setActiveServerId(invite.serverId);
         showToast("Du bist bereits Mitglied dieses Servers.", "info");
-        return;
+        return true;
       }
 
       try {
@@ -258,9 +282,18 @@ export function ServerProvider({ children }: { children: ReactNode }) {
           ref(db, `serverInvites/${cleanCode}/useCount`),
           (current) => (current || 0) + 1
         ).catch(() => {});
+        update(ref(db), { [`rateLimits/${uid}/joinServer`]: Date.now() }).catch(() => {});
+        return true;
       } catch (e) {
         console.error("[ServerContext] joinServerByInviteCode fehlgeschlagen:", e);
-        showToast("Beitreten fehlgeschlagen. Bitte erneut versuchen.", "error");
+        const denied = e instanceof Error && /permission_denied/i.test(e.message);
+        showToast(
+          denied
+            ? "Bitte kurz warten, bevor du erneut einem Server beitrittst."
+            : "Beitreten fehlgeschlagen. Bitte erneut versuchen.",
+          "error"
+        );
+        return false;
       }
     },
     [user?.id, showToast]
@@ -290,6 +323,20 @@ export function ServerProvider({ children }: { children: ReactNode }) {
       const clean = name.trim();
       if (!clean) return;
       await update(ref(db, `servers/${serverId}`), { name: clean });
+    },
+    []
+  );
+
+  const updateServerBanner = useCallback(
+    async (serverId: string, bannerUrl: string): Promise<void> => {
+      await update(ref(db, `servers/${serverId}`), { bannerUrl });
+    },
+    []
+  );
+
+  const updateServerIcon = useCallback(
+    async (serverId: string, iconUrl: string): Promise<void> => {
+      await update(ref(db, `servers/${serverId}`), { iconUrl });
     },
     []
   );
@@ -361,6 +408,7 @@ export function ServerProvider({ children }: { children: ReactNode }) {
         await update(ref(db), otherMemberUpdates);
       }
       await update(ref(db), { [`serverMembers/${serverId}/${ownerUid}`]: null });
+      logSecurityEvent(ownerUid, "server_deleted", serverId);
     } catch (e) {
       console.error("[ServerContext] deleteServer fehlgeschlagen:", e);
       throw new Error("Server konnte nicht gelöscht werden.");
@@ -384,6 +432,21 @@ export function ServerProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  const leaveServer = useCallback(
+    async (serverId: string): Promise<void> => {
+      if (!user?.id) throw new Error("Nicht eingeloggt.");
+      // Owner können den Server nicht einfach verlassen (Rule verbietet
+      // das explizit) — sie müssten ihn löschen oder (noch nicht gebaut)
+      // die Eigentümerschaft zuvor übertragen.
+      await update(ref(db), {
+        [`serverMembers/${serverId}/${user.id}`]: null,
+        [`userServers/${user.id}/${serverId}`]: null,
+      });
+      if (activeServerId === serverId) setActiveServerId(null);
+    },
+    [user?.id, activeServerId]
+  );
+
   return (
     <ServerContext.Provider
       value={{
@@ -396,9 +459,12 @@ export function ServerProvider({ children }: { children: ReactNode }) {
         joinServerByInviteCode,
         inviteUserToServer,
         renameServer,
+        updateServerBanner,
+        updateServerIcon,
         deleteServer,
         updateMemberRole,
         removeMember,
+        leaveServer,
         loading,
       }}
     >

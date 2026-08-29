@@ -79,7 +79,7 @@ export default function ServerRail({
             onClick={onToggleSidebar}
             aria-label={sidebarOpen ? "Kanalliste einklappen" : "Kanalliste ausklappen"}
             aria-pressed={sidebarOpen}
-            className="btn-icon hidden lg:flex w-6 h-6 shrink-0 mt-1 text-[var(--foreground-secondary)]"
+            className="btn-icon flex w-6 h-6 shrink-0 mt-1 text-[var(--foreground-secondary)]"
           >
             {sidebarOpen ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
           </button>

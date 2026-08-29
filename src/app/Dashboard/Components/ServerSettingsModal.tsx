@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import {
@@ -14,6 +14,7 @@ import {
   endAt,
 } from "firebase/database";
 import { db } from "@/app/lib/firebase";
+import { uploadImage, ImageValidationError } from "@/app/lib/uploadImage";
 import { useUser } from "@/app/Context/UserContext";
 import { useServer, type Server, type ServerRole } from "@/app/Context/ServerContext";
 import { useChannel } from "@/app/Context/ChannelContext";
@@ -28,6 +29,9 @@ import {
   Link as LinkIcon,
   Hash,
   UserPlus,
+  Upload,
+  LogOut,
+  Trash2,
 } from "lucide-react";
 
 type Tab = "overview" | "members" | "invites" | "channels";
@@ -65,19 +69,28 @@ export default function ServerSettingsModal({
   const { user } = useUser();
   const {
     renameServer,
+    updateServerIcon,
+    updateServerBanner,
     deleteServer,
+    leaveServer,
     updateMemberRole,
     removeMember,
     createInvite,
     inviteUserToServer,
     setActiveServerId,
   } = useServer();
-  const { channels, setChannelRestricted } = useChannel();
+  const { channels, setChannelRestricted, deleteChannel } = useChannel();
+  const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
   const { sendDirectSystemMessage } = useDirect();
 
   const [name, setName] = useState(server.name);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [uploadingIcon, setUploadingIcon] = useState(false);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
+  const iconInputRef = useRef<HTMLInputElement | null>(null);
+  const bannerInputRef = useRef<HTMLInputElement | null>(null);
 
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [invites, setInvites] = useState<(InviteDb & { code: string })[]>([]);
@@ -248,6 +261,58 @@ export default function ServerSettingsModal({
     }
   }
 
+  async function handleLeave() {
+    if (leaving) return;
+    if (!window.confirm(`„${server.name}" wirklich verlassen?`)) return;
+    setLeaving(true);
+    try {
+      await leaveServer(server.id);
+      onClose();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Verlassen fehlgeschlagen.", "error");
+    } finally {
+      setLeaving(false);
+    }
+  }
+
+  async function handleIconSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !user?.id || uploadingIcon) return;
+    setUploadingIcon(true);
+    try {
+      const url = await uploadImage(file, `serverIcons/${user.id}_${Date.now()}`);
+      await updateServerIcon(server.id, url);
+      showToast("Server-Icon aktualisiert.", "success");
+    } catch (err) {
+      showToast(
+        err instanceof ImageValidationError ? err.message : "Icon-Upload fehlgeschlagen.",
+        "error"
+      );
+    } finally {
+      setUploadingIcon(false);
+    }
+  }
+
+  async function handleBannerSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !user?.id || uploadingBanner) return;
+    setUploadingBanner(true);
+    try {
+      const url = await uploadImage(file, `serverBanners/${user.id}_${Date.now()}`);
+      await updateServerBanner(server.id, url);
+      showToast("Server-Banner aktualisiert.", "success");
+    } catch (err) {
+      showToast(
+        err instanceof ImageValidationError ? err.message : "Banner-Upload fehlgeschlagen.",
+        "error"
+      );
+    } finally {
+      setUploadingBanner(false);
+    }
+  }
+
   async function handleCreateInvite() {
     if (creatingInvite) return;
     setCreatingInvite(true);
@@ -296,7 +361,7 @@ export default function ServerSettingsModal({
       aria-modal="true"
       aria-label="Server-Einstellungen"
     >
-      <div className="modal-card w-full max-w-[640px] p-6 sm:p-8">
+      <div className="modal-card w-full max-w-[640px] max-h-[85vh] overflow-y-auto p-6 sm:p-8">
         <button
           onClick={onClose}
           className="btn-icon absolute top-5 right-5 w-9 h-9 text-[var(--foreground-secondary)]"
@@ -329,6 +394,68 @@ export default function ServerSettingsModal({
 
         {tab === "overview" && (
           <div>
+            {isAdmin && (
+              <>
+                <input
+                  ref={bannerInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleBannerSelected}
+                />
+                <input
+                  ref={iconInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleIconSelected}
+                />
+              </>
+            )}
+
+            <div
+              className="relative w-full h-28 sm:h-36 rounded-xl mb-4 bg-[var(--surface-elevated)] border border-[var(--border-subtle)] overflow-hidden bg-cover bg-center flex items-end justify-end p-2"
+              style={
+                server.bannerUrl ? { backgroundImage: `url(${server.bannerUrl})` } : undefined
+              }
+            >
+              {isAdmin && (
+                <button
+                  onClick={() => bannerInputRef.current?.click()}
+                  disabled={uploadingBanner}
+                  className="btn-secondary text-xs px-2.5 py-1.5"
+                >
+                  <Upload size={13} />
+                  {uploadingBanner ? "Lädt hoch…" : "Banner hochladen"}
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 mb-6">
+              <div className="relative w-16 h-16 rounded-full overflow-hidden border border-[var(--border-subtle)] bg-[var(--surface-elevated)] shrink-0">
+                {server.iconUrl ? (
+                  <Image src={server.iconUrl} alt={server.name} fill className="object-cover" />
+                ) : (
+                  <div
+                    className="w-full h-full flex items-center justify-center text-white text-lg font-semibold"
+                    style={{ background: "linear-gradient(135deg, #0a84ff, #0058b8)" }}
+                  >
+                    {server.name.slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              {isAdmin && (
+                <button
+                  onClick={() => iconInputRef.current?.click()}
+                  disabled={uploadingIcon}
+                  className="btn-secondary text-xs"
+                >
+                  <Upload size={13} />
+                  {uploadingIcon ? "Lädt hoch…" : "Icon ändern"}
+                </button>
+              )}
+            </div>
+
             <label className="block font-medium text-sm mb-1 text-[var(--foreground)]">
               Server-Name
             </label>
@@ -352,7 +479,7 @@ export default function ServerSettingsModal({
               )}
             </div>
 
-            {isOwner && (
+            {isOwner ? (
               <div className="pt-6 border-t border-[var(--border-subtle)]">
                 <h3 className="text-sm font-semibold text-[var(--danger)] uppercase tracking-wide mb-3 flex items-center gap-2">
                   <TriangleAlert size={14} /> Danger Zone
@@ -365,7 +492,19 @@ export default function ServerSettingsModal({
                   disabled={deleting}
                   className="btn-secondary text-[var(--danger)] border-[var(--danger)]"
                 >
+                  <Trash2 size={14} />
                   {deleting ? "Wird gelöscht…" : "Server löschen"}
+                </button>
+              </div>
+            ) : (
+              <div className="pt-6 border-t border-[var(--border-subtle)]">
+                <button
+                  onClick={handleLeave}
+                  disabled={leaving}
+                  className="btn-secondary text-[var(--danger)] border-[var(--danger)]"
+                >
+                  <LogOut size={14} />
+                  {leaving ? "Verlässt…" : "Server verlassen"}
                 </button>
               </div>
             )}
@@ -533,15 +672,39 @@ export default function ServerSettingsModal({
               >
                 <span className="text-sm text-[var(--foreground)] truncate">#{c.name}</span>
                 {isAdmin ? (
-                  <label className="flex items-center gap-2 text-xs text-[var(--foreground-secondary)] cursor-pointer shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={!!c.restricted}
-                      onChange={(e) => setChannelRestricted(c.id, e.target.checked)}
-                      className="accent-[var(--accent)]"
-                    />
-                    Eingeschränkt
-                  </label>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <label className="flex items-center gap-2 text-xs text-[var(--foreground-secondary)] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!c.restricted}
+                        onChange={(e) => setChannelRestricted(c.id, e.target.checked)}
+                        className="accent-[var(--accent)]"
+                      />
+                      Eingeschränkt
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`#${c.name} löschen`}
+                      disabled={deletingChannelId === c.id}
+                      onClick={async () => {
+                        if (!window.confirm(`#${c.name} wirklich löschen?`)) return;
+                        setDeletingChannelId(c.id);
+                        try {
+                          await deleteChannel(c.id);
+                        } catch (e) {
+                          showToast(
+                            e instanceof Error ? e.message : "Löschen fehlgeschlagen.",
+                            "error"
+                          );
+                        } finally {
+                          setDeletingChannelId(null);
+                        }
+                      }}
+                      className="btn-icon w-7 h-7 text-[var(--danger)]"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 ) : (
                   <span className="text-xs text-[var(--foreground-secondary)] shrink-0">
                     {c.restricted ? "Eingeschränkt" : "Offen"}

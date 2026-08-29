@@ -56,7 +56,7 @@ export default function Header({
         <button
           type="button"
           onClick={onToggleHeader}
-          className="btn-icon md:hidden w-10 h-10 bg-[var(--surface-elevated)] border border-[var(--border-subtle)] shadow-sm"
+          className="btn-icon lg:hidden w-10 h-10 bg-[var(--surface-elevated)] border border-[var(--border-subtle)] shadow-sm"
           aria-label="Menü öffnen"
         >
           <Menu size={20} />

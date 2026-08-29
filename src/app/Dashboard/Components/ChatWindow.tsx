@@ -12,7 +12,7 @@ import { useProfileDialog } from "@/app/Context/ProfileDialogContext";
 import MembersModal from "./MembersModal";
 import MessageList from "./MessageList";
 import MessageComposer from "./MessageComposer";
-import { Lock, Hash } from "lucide-react";
+import { Lock, Hash, Users } from "lucide-react";
 
 function EncryptionBadge({ detail }: { detail: string }) {
   return (
@@ -234,10 +234,11 @@ export default function ChatWindow() {
 
             <button
               onClick={() => setMembersOpen(true)}
-              className="hidden md:flex items-center gap-2 bg-[var(--border-subtle)] hover:bg-[color-mix(in_srgb,var(--foreground)_12%,transparent)] transition px-3 py-2 rounded-full"
+              className="flex items-center gap-2 bg-[var(--border-subtle)] hover:bg-[color-mix(in_srgb,var(--foreground)_12%,transparent)] transition px-2.5 sm:px-3 py-2 rounded-full shrink-0"
               aria-label="Mitglieder anzeigen"
             >
-              <div className="flex -space-x-2">
+              <Users size={16} className="sm:hidden text-[var(--foreground-secondary)]" />
+              <div className="hidden sm:flex -space-x-2">
                 {topAvatars.map((m) => (
                   <div key={m.id} className="relative">
                     <Image
@@ -251,7 +252,7 @@ export default function ChatWindow() {
                   </div>
                 ))}
               </div>
-              <span className="text-xs md:text-sm text-[var(--foreground)]">
+              <span className="hidden sm:inline text-xs md:text-sm text-[var(--foreground)]">
                 {members.length} Mitglieder
               </span>
             </button>

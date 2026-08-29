@@ -10,6 +10,7 @@ import { Upload } from "lucide-react";
 import { useUser } from "../Context/UserContext";
 import { useToast } from "../Context/ToastContext";
 import { uploadImage, ImageValidationError } from "../lib/uploadImage";
+import { joinHomeServerIfNeeded } from "../lib/homeServer";
 
 export default function SelectAvatar() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -91,7 +92,10 @@ export default function SelectAvatar() {
         email: email,
         avatar,
         isGuest: user.isGuest,
+        emailVerified: user.emailVerified,
       });
+
+      joinHomeServerIfNeeded(user.id);
 
       router.push("/Dashboard");
     } catch (e) {
