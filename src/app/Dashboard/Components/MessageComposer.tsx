@@ -69,12 +69,8 @@ export default function MessageComposer({
   const TEXTAREA_MIN_HEIGHT = 36;
   const TEXTAREA_MAX_HEIGHT = 160;
 
-  // Textarea wächst mit dem Inhalt mit, statt bei fester Höhe intern zu
-  // scrollen (kaum sichtbar/bedienbar) — bis zur bestehenden max-h-Grenze,
-  // danach übernimmt der reguläre Scroll innerhalb des Felds. Erst auf die
-  // Mindesthöhe zurücksetzen (statt "auto"), bevor scrollHeight gemessen
-  // wird — sonst fällt die Leerzustand-Höhe je nach Zeilenhöhe/Padding
-  // größer aus als die alte feste Höhe (h-9/h-10) und wirkt "zu groß".
+  // Erst auf Mindesthöhe zurücksetzen (statt "auto"), bevor scrollHeight
+  // gemessen wird — sonst fällt die Leerzustand-Höhe zu groß aus.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -108,9 +104,6 @@ export default function MessageComposer({
       await onSend(text, mentionedUids.length ? mentionedUids : undefined);
       setValue("");
       setMentionOpen(false);
-      // Kurze clientseitige Sendesperre passend zum serverseitigen
-      // Rate-Limit (siehe database.rules.json) — verhindert, dass Nutzer im
-      // Normalfall überhaupt erst gegen die Regel laufen.
       setCooldown(true);
       setTimeout(() => setCooldown(false), 450);
     } catch (e) {

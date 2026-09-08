@@ -33,9 +33,6 @@ import LinkPreview from "./LinkPreview";
 import EmojiPicker from "./EmojiPicker";
 import MessageComposer from "./MessageComposer";
 
-/** Einladungskarte für Channel-/Server-Einladungen, die als Systemnachricht
- * im DM-Chat stehen (zusätzlich zur Glocken-Benachrichtigung). Zeigt
- * Annehmen/Ablehnen, solange die zugehörige Einladung noch offen ist. */
 function InviteCard({ m }: { m: Message }) {
   const { showToast } = useToast();
   const {
@@ -165,7 +162,6 @@ function isOwn(m: Message, myId?: string | null, myEmail?: string | null) {
   return !!myEmail && m.user.email === myEmail;
 }
 
-/** Hebt `@EigenerName`-Vorkommen im Nachrichtentext farblich hervor. */
 function highlightMentions(text: string, myName?: string): ReactNode {
   if (!myName?.trim()) return text;
   const escaped = myName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

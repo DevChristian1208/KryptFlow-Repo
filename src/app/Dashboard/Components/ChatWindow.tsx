@@ -91,7 +91,6 @@ export default function ChatWindow() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pendingForceScrollRef = useRef(false);
 
-  // Erwähnungs-Badges für den geöffneten Channel als gelesen markieren
   useEffect(() => {
     if (activeChannel?.id && unreadMentionsByChannel[activeChannel.id]) {
       markChannelMentionsRead(activeChannel.id);
@@ -101,10 +100,6 @@ export default function ChatWindow() {
   /* AVATARS */
   const topAvatars = useMemo(() => members.slice(0, 4), [members]);
 
-  // Automatisch ans Ende scrollen, wenn eine neue Nachricht eintrifft (aber
-  // nur, wenn man ohnehin schon nah am unteren Ende ist — so wird man beim
-  // Lesen älterer Nachrichten nicht ungefragt nach unten gerissen). Beim
-  // Wechsel der Konversation dagegen immer sofort ans Ende springen.
   function scrollToBottom(force: boolean) {
     const el = scrollRef.current;
     if (!el) return;
@@ -115,11 +110,9 @@ export default function ChatWindow() {
   }
 
   useEffect(() => {
-    // Der Konversationswechsel selbst leert die Liste synchron (Länge kurz
-    // 0) — die entschlüsselten Nachrichten füllen sie erst asynchron danach.
-    // Ein sofortiger scrollToBottom(true) träfe daher auf eine leere Liste
-    // und liefe ins Leere; stattdessen einmalig vormerken und beim
-    // nächsten tatsächlichen Anwachsen der Liste erzwingen.
+    // Liste ist beim Konversationswechsel kurz leer (füllt sich erst
+    // asynchron nach der Entschlüsselung) — ein sofortiges scrollToBottom
+    // liefe ins Leere, deshalb vormerken und beim nächsten Anwachsen erzwingen.
     pendingForceScrollRef.current = true;
     scrollToBottom(true);
     setSearchOpen(false);
@@ -132,10 +125,6 @@ export default function ChatWindow() {
     scrollToBottom(force);
   }, [dmMessages.length, channelMessages.length]);
 
-  // Nachrichten-Suche: rein clientseitig über die bereits entschlüsselten
-  // Nachrichten der aktuell aktiven Konversation — bei E2EE kann der Server
-  // ohnehin nicht durchsuchen, eine serverseitige Suche über den Klartext
-  // ist architektonisch ausgeschlossen.
   const q = searchQuery.trim().toLowerCase();
   const filteredDmMessages = useMemo(
     () => (q ? dmMessages.filter((m) => m.text.toLowerCase().includes(q)) : dmMessages),
