@@ -170,16 +170,26 @@ export default function Login() {
         }
       }
 
+      // Nur für die automatische Schlüssel-Wiederherstellung/-Sicherung
+      // (siehe ensureIdentityAndAutoBackup in crypto.ts) — rein im
+      // Arbeitsspeicher dieses Tabs, nie persistiert, wird direkt beim
+      // ersten Auslesen in UserContext.tsx wieder verworfen.
+      //
+      // WICHTIG: muss VOR signInWithEmailAndPassword gesetzt werden, nicht
+      // danach — Firebase löst onAuthStateChanged (in UserContext.tsx) aus,
+      // sobald der Login intern durchgeht, und das kann noch VOR der
+      // Fortsetzung dieser Funktion nach dem await passieren (Race). War die
+      // Passwort-Übergabe zu spät dran, fand UserContext kein Passwort vor,
+      // versuchte keine Wiederherstellung und erzeugte eine komplett neue,
+      // unabhängige Identität — genau das Muster, das schon einmal (mit der
+      // JWK-d/key_ops-Ursache) diese Symptome verursacht hat, diesmal aus
+      // einem anderen Grund.
+      setPendingLoginPassword(password);
       const cred = await signInWithEmailAndPassword(
         auth,
         resolvedEmail,
         password,
       );
-      // Nur für die automatische Schlüssel-Wiederherstellung/-Sicherung
-      // (siehe ensureIdentityAndAutoBackup in crypto.ts) — rein im
-      // Arbeitsspeicher dieses Tabs, nie persistiert, wird direkt beim
-      // ersten Auslesen in UserContext.tsx wieder verworfen.
-      setPendingLoginPassword(password);
       await completeLogin(cred);
     } catch (err) {
       if (

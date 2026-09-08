@@ -44,11 +44,13 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
       // Nur für das automatische Schlüssel-Backup direkt bei der ersten
       // Identitäts-Erzeugung (siehe ensureIdentityAndAutoBackup in
-      // crypto.ts) — rein im Arbeitsspeicher, nie persistiert.
+      // crypto.ts) — rein im Arbeitsspeicher, nie persistiert. Muss VOR
+      // createUserWithEmailAndPassword gesetzt werden, siehe Kommentar in
+      // Login/page.tsx (Race mit onAuthStateChanged).
       setPendingLoginPassword(password);
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
       if (name.trim() !== "") {
         await updateProfile(cred.user, { displayName: name.trim() });
       }
