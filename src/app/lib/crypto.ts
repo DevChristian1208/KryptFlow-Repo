@@ -713,9 +713,21 @@ export function fetchPublicIdentity(
     return cached.promise;
   }
 
+  const startedAt = Date.now();
   const promise = (async () => {
     const snap = await get(ref(db, `publicKeys/${uid}`));
-    if (!snap.exists()) return null;
+    if (!snap.exists()) {
+      // Nicht cachen: sonst bliebe "kein Schlüssel" für die volle TTL hängen,
+      // selbst wenn der Nutzer (z. B. gerade erst kontaktierte Fremde, deren
+      // ensureIdentityKeys() noch läuft) Sekundenbruchteile später doch
+      // veröffentlicht wird. Nur den eigenen Eintrag löschen, nicht einen
+      // zwischenzeitlich von einem anderen (z. B. bypassCache-)Aufruf neu
+      // gesetzten.
+      if (publicKeyCache.get(uid)?.fetchedAt === startedAt) {
+        publicKeyCache.delete(uid);
+      }
+      return null;
+    }
     const val = snap.val() as PublicIdentity;
 
     const ecdh = await crypto.subtle.importKey(
@@ -736,7 +748,7 @@ export function fetchPublicIdentity(
     return { ecdh, ecdsa, keyVersion: val.keyVersion };
   })();
 
-  publicKeyCache.set(uid, { fetchedAt: Date.now(), promise });
+  publicKeyCache.set(uid, { fetchedAt: startedAt, promise });
   return promise;
 }
 
