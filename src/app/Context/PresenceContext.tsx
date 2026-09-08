@@ -29,11 +29,6 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     myUidRef.current = user?.id ?? null;
   }, [user?.id]);
 
-  // Eigene Präsenz melden: bei jedem (Re-)Connect wird der eigene Status auf
-  // "online" gesetzt und gleichzeitig ein onDisconnect-Hook hinterlegt, der
-  // ihn serverseitig auf "offline" umschaltet, sobald die Verbindung abreißt
-  // (Tab schließen, Netzwerkausfall, Absturz) — funktioniert auch, wenn der
-  // Client keinen sauberen Logout durchführt.
   useEffect(() => {
     if (connectedUnsub.current) {
       connectedUnsub.current();
@@ -62,7 +57,6 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     };
   }, [user?.id]);
 
-  // Präsenz aller Nutzer live mitlesen
   useEffect(() => {
     if (!user?.id) {
       setOnlineUids({});
@@ -82,11 +76,6 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, [user?.id]);
 
-  // Vor einem bewussten Logout aufzurufen: hebt den onDisconnect-Hook auf
-  // (der sonst später ohnehin "offline" schreiben würde) und setzt die
-  // Präsenz sofort selbst zurück — ohne das bleibt man für andere "online",
-  // solange der RTDB-Socket dieses Tabs offen bleibt (z. B. bei einem reinen
-  // Client-seitigen Redirect nach /Login ohne echten Verbindungsabbruch).
   const signOutPresence = async () => {
     const uid = myUidRef.current;
     if (!uid) return;
@@ -95,8 +84,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       await onDisconnect(myPresenceRef).cancel();
       await set(myPresenceRef, { state: "offline", lastChanged: serverTimestamp() });
     } catch {
-      // Bestmögliche Anstrengung — beim tatsächlichen Verbindungsabbruch
-      // greift ohnehin noch der onDisconnect-Hook als Fallback.
+      // Fallback: onDisconnect-Hook übernimmt beim tatsächlichen Verbindungsabbruch
     }
   };
 

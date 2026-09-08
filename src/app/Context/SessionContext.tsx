@@ -35,10 +35,6 @@ const SessionContext = createContext<SessionContextType | undefined>(undefined);
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 
-// Standardverhalten: automatische Abmeldung nach Inaktivität — wer das
-// nicht will, kann in den Einstellungen "Dauerhaft angemeldet bleiben"
-// aktivieren (newusers/{uid}/staySignedIn), das schaltet den Timer für
-// diesen Account komplett ab.
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000;
 const ACTIVITY_EVENTS = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"] as const;
@@ -63,8 +59,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const selfDestructedRef = useRef(false);
   const lastActivityRef = useRef(Date.now());
 
-  // Eigene Präferenz live mitlesen — reagiert sofort, falls in einem
-  // anderen Tab/Gerät geändert, ohne dass ein Neu-Login nötig wäre.
   useEffect(() => {
     if (!user?.id) {
       setStaySignedInState(false);
@@ -80,14 +74,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     await update(ref(db, `newusers/${user.id}`), { staySignedIn: value });
   };
 
-  // Automatische Abmeldung nach Inaktivität — der Standard, den es vorher
-  // gar nicht gab (Firebase Auth hält Logins sonst unbegrenzt aufrecht).
-  // Aktivität wird zusätzlich in localStorage gespiegelt (mit einfachem
-  // Zeit-Throttle, kein Schreiben bei jeder Mausbewegung): Firebase Auth
-  // ist pro Origin tab-übergreifend gemeinsam angemeldet, ein rein
-  // lokaler In-Memory-Timer würde also bei mehreren offenen Tabs (z. B.
-  // Test-Setup mit zwei Accounts) einen inaktiven Hintergrund-Tab den
-  // gerade aktiv genutzten Tab mit-abmelden lassen.
+  // Aktivität wird in localStorage gespiegelt (throttled), nicht nur im
+  // In-Memory-Ref: Firebase Auth ist pro Origin tab-übergreifend gemeinsam
+  // angemeldet — ohne den Spiegel würde ein inaktiver Hintergrund-Tab bei
+  // mehreren offenen Tabs den gerade aktiv genutzten mit-abmelden.
   useEffect(() => {
     if (!user?.id || staySignedIn) return;
 
@@ -122,7 +112,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [user?.id, staySignedIn, router, showToast]);
 
-  // Eigene Sitzung anlegen/aktualisieren + Heartbeat.
   useEffect(() => {
     if (!user?.id) {
       setCurrentSessionId(null);
@@ -144,9 +133,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       update(myRef, { lastSeenAt: serverTimestamp() }).catch(() => {});
     }, HEARTBEAT_MS);
 
-    // Wird dieser Sitzungs-Knoten von einem anderen Gerät aus gelöscht
-    // (Settings -> Sitzungen -> "Abmelden"), meldet sich dieser Tab selbst
-    // ab — echte (near-realtime) Remote-Abmeldung ohne eigenes Backend.
     const unsub = onValue(myRef, (snap) => {
       if (!snap.exists() && !selfDestructedRef.current) {
         selfDestructedRef.current = true;
@@ -161,7 +147,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [user?.id, router, showToast]);
 
-  // Alle eigenen Sitzungen live mitlesen (für die Settings-Übersicht).
   useEffect(() => {
     if (!user?.id) {
       setSessions([]);

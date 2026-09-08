@@ -70,9 +70,6 @@ export function SavedMessagesProvider({ children }: { children: ReactNode }) {
   const [savedMessages, setSavedMessages] = useState<SavedMessage[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Kleine In-Memory-Caches für Anzeige-Metadaten (Name/Avatar), damit nicht
-  // bei jedem Snapshot-Update erneut nachgeladen wird — dieselben Nutzer/
-  // Channels tauchen typischerweise mehrfach in der Liste auf.
   const userCache = useRef<Map<string, { name: string; avatar?: string }>>(new Map());
   const channelCache = useRef<Map<string, string>>(new Map());
 
@@ -111,9 +108,7 @@ export function SavedMessagesProvider({ children }: { children: ReactNode }) {
             let text = "🔒 Nicht entschlüsselbar";
             try {
               text = await decryptForSelf(uid, v);
-            } catch {
-              // bleibt bei der Fehler-Anzeige
-            }
+            } catch {}
             const sender = await resolveUser(v.senderUid);
             const channelName =
               v.sourceKind === "channel" && v.channelId

@@ -10,9 +10,7 @@ import {
 
 type Theme = "light" | "dark";
 type ThemeContextType = {
-  /** Aktuell wirksames Theme (System-Einstellung, falls kein Override gesetzt ist) */
   theme: Theme;
-  /** true, wenn der Nutzer die System-Einstellung manuell überschrieben hat */
   isOverridden: boolean;
   toggleTheme: () => void;
 };
@@ -48,7 +46,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [theme, isOverridden]);
 
-  // Solange keine explizite Wahl getroffen wurde, der System-Einstellung folgen
   useEffect(() => {
     if (isOverridden) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
