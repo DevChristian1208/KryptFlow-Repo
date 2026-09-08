@@ -13,9 +13,6 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // Von src/middleware.ts pro Request gesetzt — erlaubt diesem einen
-  // Inline-Script, trotz strikter CSP (script-src mit Nonce statt
-  // 'unsafe-inline') zu laufen.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
 
   return (
@@ -29,8 +26,6 @@ export default async function RootLayout({
           // (leeren) Wert ab. Bekannte, folgenlose Next.js/React-Eigenheit
           // bei diesem Muster, siehe Next.js-CSP-Doku.
           suppressHydrationWarning
-          // Setzt das Theme-Attribut vor dem ersten Paint, damit beim Laden
-          // kein kurzes Aufblitzen im falschen Farbschema sichtbar ist.
           dangerouslySetInnerHTML={{
             __html: `try {
   var t = localStorage.getItem('theme');

@@ -1,15 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Server-seitiges "Unfurlen" von Links in Nachrichten: der Browser kann die
-// og:-Metadaten fremder Seiten wegen CORS meist nicht selbst lesen, daher
-// holt diese Route die Seite serverseitig und extrahiert die relevanten
-// <meta>-Tags per einfachem Regex statt einer schweren HTML-Parser-
-// Abhängigkeit — für og:title/description/image/site_name reicht das.
-//
-// Läuft bewusst NICHT über die Nachrichteninhalte selbst (die sind Ende-zu-
-// Ende-verschlüsselt, der Server sieht sie nie) — der Client extrahiert die
-// URL erst NACH dem Entschlüsseln und fragt dann nur noch die URL selbst
-// hier an, ganz ohne Nachrichtenkontext.
+// Läuft bewusst NICHT über die Nachrichteninhalte selbst (Ende-zu-Ende-
+// verschlüsselt, der Server sieht sie nie) — der Client extrahiert die URL
+// erst NACH dem Entschlüsseln und fragt dann nur die URL selbst hier an.
 
 const FETCH_TIMEOUT_MS = 5000;
 const MAX_BYTES = 512 * 1024;

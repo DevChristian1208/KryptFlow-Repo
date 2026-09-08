@@ -30,8 +30,6 @@ export default function SelectAvatar() {
       router.replace("/Login");
       return;
     }
-    // Der Name wird bewusst NICHT vorausgefüllt (auch nicht aus E-Mail oder
-    // Anzeigenamen) — der Nutzer soll ihn hier immer selbst eingeben.
     setEmail(user.isGuest ? "" : user.email || "");
   }, [user, router]);
 

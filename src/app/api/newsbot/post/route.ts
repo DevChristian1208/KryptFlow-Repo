@@ -11,12 +11,6 @@ import {
 } from "@/app/lib/botCrypto";
 import type { ChannelKeyEnvelope } from "@/app/lib/crypto";
 
-// Vom Admin manuell ausgelöst (siehe NewsBotSetupModal / ServerSettingsModal)
-// — postet einen kurzen Hacker-News-Digest in den #news-Channel, verschlüsselt
-// mit den Zugangsdaten/Schlüsseln des Bot-Accounts (siehe botCrypto.ts).
-// Kann später zusätzlich per externem Scheduler (z. B. Vercel Cron) auf
-// diese Route zeigen, sobald das Projekt deployt ist.
-
 const HN_TOP_STORIES = "https://hacker-news.firebaseio.com/v0/topstories.json";
 const HN_ITEM = (id: number) => `https://hacker-news.firebaseio.com/v0/item/${id}.json`;
 const STORY_COUNT = 5;

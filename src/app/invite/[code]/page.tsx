@@ -21,8 +21,6 @@ export default function InvitePage() {
     handled.current = true;
 
     if (!user) {
-      // Nicht eingeloggt: Code merken, nach dem Login automatisch
-      // konsumieren (siehe Login/page.tsx), dann zum Login weiterleiten.
       try {
         localStorage.setItem(PENDING_INVITE_KEY, params.code);
       } catch {}

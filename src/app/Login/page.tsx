@@ -1,5 +1,3 @@
-//Login Page
-
 "use client";
 
 import Image from "next/image";
@@ -153,11 +151,6 @@ export default function Login() {
         }
       }
 
-      // Nur für die automatische Schlüssel-Wiederherstellung/-Sicherung
-      // (siehe ensureIdentityAndAutoBackup in crypto.ts) — rein im
-      // Arbeitsspeicher dieses Tabs, nie persistiert, wird direkt beim
-      // ersten Auslesen in UserContext.tsx wieder verworfen.
-      //
       // WICHTIG: muss VOR signInWithEmailAndPassword gesetzt werden, nicht
       // danach — Firebase löst onAuthStateChanged (in UserContext.tsx) aus,
       // sobald der Login intern durchgeht, und das kann noch VOR der

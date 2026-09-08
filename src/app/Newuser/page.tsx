@@ -5,9 +5,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { auth, db } from "@/app/lib/firebase";
-// Die beiden Funktionen arbeiten nur in der FB Auth und nicht in der RD
-//createUserWithEmailAndPassword -> erstellt neuen User in der Auth mit auth (UID), email und pw
-//updateProfile setzt displayname in Auth
 import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { ref, runTransaction } from "firebase/database";
 import { FirebaseError } from "firebase/app";
