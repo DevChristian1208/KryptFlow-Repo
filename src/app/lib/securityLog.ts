@@ -33,13 +33,6 @@ export function labelForSecurityEvent(type: SecurityEventType): string {
   return LABELS[type] || type;
 }
 
-/**
- * Selbst-Audit-Log, nur für den eigenen Account lesbar (siehe
- * database.rules.json: securityLog/{uid}) — kein Cloud-Functions-Backend
- * verfügbar, daher rein clientseitig ausgelöst bei sicherheitsrelevanten
- * Aktionen dieses Nutzers selbst. Best-effort/fire-and-forget: ein
- * Fehlschlag beim Protokollieren darf die eigentliche Aktion nie blockieren.
- */
 export function logSecurityEvent(
   uid: string,
   type: SecurityEventType,

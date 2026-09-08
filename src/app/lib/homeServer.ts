@@ -1,17 +1,12 @@
 import { ref, get, set, update, push } from "firebase/database";
 import { db } from "@/app/lib/firebase";
 
-/**
- * Der "Cryptflow HomeServer" — fester, gut lesbarer Schlüssel statt einer
- * zufälligen ID, damit der Client ihn wiedererkennen und (a) einmalig
- * anlegen sowie (b) neue Konten automatisch beitreten lassen kann.
- */
 export const HOME_SERVER_ID = "home";
 
-// Nur dieser Account darf den HomeServer einmalig anlegen (und wird damit
-// automatisch dessen Owner) — ohne Cloud Functions/Admin-SDK gibt es keinen
-// anderen verlässlichen Weg, das deterministisch statt "wer als Erstes nach
-// diesem Deploy einloggt" zu entscheiden.
+// Nur dieser Account darf den HomeServer einmalig anlegen — ohne Cloud
+// Functions/Admin-SDK gibt es keinen anderen verlässlichen Weg, das
+// deterministisch statt "wer als Erstes nach diesem Deploy einloggt" zu
+// entscheiden.
 const HOME_SERVER_OWNER_EMAIL = "christian.pressig@web.de";
 
 const HOME_CHANNELS: { name: string; description: string }[] = [
@@ -22,12 +17,6 @@ const HOME_CHANNELS: { name: string; description: string }[] = [
   { name: "feedback-ideen", description: "Feedback, Bugs und Ideen für Cryptflow." },
 ];
 
-/**
- * Legt den HomeServer inkl. Standard-Channels an, falls er noch nicht
- * existiert — einmalig, ausgelöst vom designierten Owner-Account beim
- * nächsten Login. Danach übernimmt ensureNewAccountJoinsHomeServer für alle
- * anderen Accounts nur noch den Beitritt.
- */
 export async function ensureHomeServerBootstrapped(
   uid: string,
   email: string | null
@@ -67,23 +56,13 @@ export async function ensureHomeServerBootstrapped(
   await update(ref(db), channelUpdates);
 }
 
-/**
- * Lässt ein (nicht-Owner-)Konto dem HomeServer automatisch beitreten, falls
- * es noch nicht Mitglied ist — für jeden, der die Konto-Einrichtung
- * abschließt (SelectAvatar), sowohl frisch registrierte als auch Gäste.
- * Best-effort: existiert der HomeServer (noch) nicht (Owner war noch nicht
- * eingeloggt) oder schlägt der Beitritt fehl, bricht das die eigentliche
- * Konto-Einrichtung nicht ab.
- */
 export async function joinHomeServerIfNeeded(uid: string): Promise<void> {
   try {
     // NICHT vorab servers/{HOME_SERVER_ID} lesen: dessen .read-Regel
     // verlangt (sobald der Server existiert) bereits Mitgliedschaft — für
-    // ein frisches Konto, das ja gerade erst beitreten will, wäre das ein
-    // Henne-Ei-Problem und die gesamte Funktion würde mit PERMISSION_DENIED
-    // abbrechen, bevor überhaupt beigetreten wird. Die eigene
-    // serverMembers/{id}/{uid}-Zeile ist dagegen immer für die eigene uid
-    // lesbar, unabhängig von bestehender Mitgliedschaft.
+    // ein frisches Konto wäre das ein Henne-Ei-Problem (PERMISSION_DENIED
+    // vor dem eigentlichen Beitritt). Die eigene serverMembers/{id}/{uid}-
+    // Zeile ist dagegen immer für die eigene uid lesbar.
     const memberSnap = await get(ref(db, `serverMembers/${HOME_SERVER_ID}/${uid}`));
     if (memberSnap.exists()) return;
 

@@ -1,10 +1,3 @@
-// Server-seitige Krypto-Helfer für den News-Bot (siehe /api/newsbot/post).
-// Bewusst getrennt von crypto.ts: die dortigen Funktionen laden Identitäten
-// aus IndexedDB (browserseitig), das gibt es in einer Next.js API-Route
-// nicht. Hier werden dieselben Algorithmen/Parameter (P-256 ECDH/ECDSA,
-// AES-256-GCM) direkt mit den aus Env-Variablen importierten Bot-Schlüsseln
-// verwendet — kompatibel mit den von Clients erzeugten/gelesenen Umschlägen.
-
 import { bufToBase64, base64ToBuf, type ChannelKeyEnvelope } from "./crypto";
 
 export async function importBotPrivateKeys(
@@ -28,7 +21,6 @@ export async function importBotPrivateKeys(
   return { ecdhPrivateKey, ecdsaPrivateKey };
 }
 
-/** Entpackt einen Channel-Key-Umschlag mit einem direkt übergebenen privaten ECDH-Key. */
 export async function unwrapChannelKeyServer(
   ecdhPrivateKey: CryptoKey,
   envelope: ChannelKeyEnvelope

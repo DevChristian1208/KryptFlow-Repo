@@ -16,17 +16,9 @@ function validateImage(file: File): void {
   }
 }
 
-/**
- * Lädt ein Bild zu Firebase Storage hoch und liefert die Download-URL.
- *
- * Mit hartem Timeout: `uploadBytes` verwendet intern ein resumables
- * Upload-Protokoll mit eigener Retry-/Backoff-Logik — bei einem dauerhaften
- * Netzwerk-/CORS-Problem (z. B. fehlende CORS-Konfiguration des Buckets)
- * stuft die Firebase-SDK das als "vorübergehenden" Fehler ein und versucht
- * es immer wieder, statt zeitnah abzulehnen. Ohne dieses Timeout bleibt die
- * aufrufende UI beliebig lange auf "Wird hochgeladen…" hängen, ohne dass
- * der Nutzer je eine Fehlermeldung sieht.
- */
+// Hartes Timeout nötig: `uploadBytes` retried intern unbegrenzt bei
+// dauerhaften Netzwerk-/CORS-Problemen, statt zeitnah abzulehnen — ohne
+// dieses Timeout bliebe die UI unbegrenzt auf "Wird hochgeladen…" hängen.
 export async function uploadImage(file: File, path: string): Promise<string> {
   validateImage(file);
 
