@@ -9,7 +9,7 @@ import {
   ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { ref, onValue, set, update, remove, serverTimestamp } from "firebase/database";
+import { ref, onValue, off, set, update, remove, serverTimestamp } from "firebase/database";
 import { signOut } from "firebase/auth";
 import { db, auth } from "@/app/lib/firebase";
 import { useUser } from "./UserContext";
@@ -27,11 +27,21 @@ type SessionContextType = {
   currentSessionId: string | null;
   endSession: (sessionId: string) => Promise<void>;
   endCurrentSession: () => Promise<void>;
+  staySignedIn: boolean;
+  setStaySignedIn: (value: boolean) => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextType | undefined>(undefined);
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
+
+// Standardverhalten: automatische Abmeldung nach Inaktivität — wer das
+// nicht will, kann in den Einstellungen "Dauerhaft angemeldet bleiben"
+// aktivieren (newusers/{uid}/staySignedIn), das schaltet den Timer für
+// diesen Account komplett ab.
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const IDLE_CHECK_INTERVAL_MS = 60 * 1000;
+const ACTIVITY_EVENTS = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"] as const;
 
 function getOrCreateSessionId(): string {
   const key = "cryptflow_session_id";
@@ -49,7 +59,68 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [staySignedIn, setStaySignedInState] = useState(false);
   const selfDestructedRef = useRef(false);
+  const lastActivityRef = useRef(Date.now());
+
+  // Eigene Präferenz live mitlesen — reagiert sofort, falls in einem
+  // anderen Tab/Gerät geändert, ohne dass ein Neu-Login nötig wäre.
+  useEffect(() => {
+    if (!user?.id) {
+      setStaySignedInState(false);
+      return;
+    }
+    const r = ref(db, `newusers/${user.id}/staySignedIn`);
+    const unsub = onValue(r, (snap) => setStaySignedInState(snap.val() === true));
+    return () => off(r, "value", unsub);
+  }, [user?.id]);
+
+  const setStaySignedIn = async (value: boolean) => {
+    if (!user?.id) return;
+    await update(ref(db, `newusers/${user.id}`), { staySignedIn: value });
+  };
+
+  // Automatische Abmeldung nach Inaktivität — der Standard, den es vorher
+  // gar nicht gab (Firebase Auth hält Logins sonst unbegrenzt aufrecht).
+  // Aktivität wird zusätzlich in localStorage gespiegelt (mit einfachem
+  // Zeit-Throttle, kein Schreiben bei jeder Mausbewegung): Firebase Auth
+  // ist pro Origin tab-übergreifend gemeinsam angemeldet, ein rein
+  // lokaler In-Memory-Timer würde also bei mehreren offenen Tabs (z. B.
+  // Test-Setup mit zwei Accounts) einen inaktiven Hintergrund-Tab den
+  // gerade aktiv genutzten Tab mit-abmelden lassen.
+  useEffect(() => {
+    if (!user?.id || staySignedIn) return;
+
+    const STORAGE_KEY = "cryptflow_last_activity";
+    const now = Date.now();
+    lastActivityRef.current = now;
+    localStorage.setItem(STORAGE_KEY, String(now));
+
+    const onActivity = () => {
+      const t = Date.now();
+      if (t - lastActivityRef.current < 5000) return;
+      lastActivityRef.current = t;
+      localStorage.setItem(STORAGE_KEY, String(t));
+    };
+    ACTIVITY_EVENTS.forEach((ev) =>
+      window.addEventListener(ev, onActivity, { passive: true })
+    );
+
+    const check = setInterval(() => {
+      const stored = Number(localStorage.getItem(STORAGE_KEY)) || lastActivityRef.current;
+      const lastActivity = Math.max(stored, lastActivityRef.current);
+      if (Date.now() - lastActivity >= IDLE_TIMEOUT_MS) {
+        clearInterval(check);
+        showToast("Du wurdest wegen Inaktivität abgemeldet.", "info");
+        signOut(auth).finally(() => router.push("/Login"));
+      }
+    }, IDLE_CHECK_INTERVAL_MS);
+
+    return () => {
+      ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, onActivity));
+      clearInterval(check);
+    };
+  }, [user?.id, staySignedIn, router, showToast]);
 
   // Eigene Sitzung anlegen/aktualisieren + Heartbeat.
   useEffect(() => {
@@ -123,7 +194,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionContext.Provider
-      value={{ sessions, currentSessionId, endSession, endCurrentSession }}
+      value={{
+        sessions,
+        currentSessionId,
+        endSession,
+        endCurrentSession,
+        staySignedIn,
+        setStaySignedIn,
+      }}
     >
       {children}
     </SessionContext.Provider>

@@ -194,7 +194,7 @@ export default function MembersModal({
                     alt={m.name}
                     width={40}
                     height={40}
-                    className="rounded-full"
+                    className="w-10 h-10 rounded-full object-cover"
                   />
                   <div className="min-w-0">
                     <div className="font-medium truncate text-[var(--foreground)]">
@@ -270,7 +270,7 @@ export default function MembersModal({
                   alt={c.name}
                   width={26}
                   height={26}
-                  className="rounded-full shrink-0"
+                  className="w-[26px] h-[26px] rounded-full object-cover shrink-0"
                 />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-[var(--foreground)]">{c.name}</div>

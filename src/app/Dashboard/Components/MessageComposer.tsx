@@ -7,9 +7,11 @@ import {
   uploadBytes,
   getDownloadURL,
 } from "firebase/storage";
-import { Plus, Smile, ArrowUp, AtSign } from "lucide-react";
+import { Plus, Smile, ArrowUp, AtSign, BarChart3 } from "lucide-react";
 import EmojiPicker from "./EmojiPicker";
+import PollComposerModal from "./PollComposerModal";
 import { useToast } from "@/app/Context/ToastContext";
+import { encryptBlob } from "@/app/lib/crypto";
 import type { Member } from "@/app/Context/ChannelContext";
 
 type Props = {
@@ -17,7 +19,12 @@ type Props = {
   onSend: (text: string, mentionedUids?: string[]) => Promise<void> | void;
   disabled?: boolean;
   members?: Member[];
+  onTyping?: () => void;
+  customEmojis?: { id: string; name: string; url: string }[];
+  enablePolls?: boolean;
 };
+
+const POLL_MARKER = "POLL::";
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15 MB
 
@@ -30,11 +37,15 @@ export default function MessageComposer({
   onSend,
   disabled,
   members,
+  onTyping,
+  customEmojis,
+  enablePolls,
 }: Props) {
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
   const [cooldown, setCooldown] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showPoll, setShowPoll] = useState(false);
   const { showToast } = useToast();
 
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -112,6 +123,7 @@ export default function MessageComposer({
   const handleChange: React.ChangeEventHandler<HTMLTextAreaElement> = (e) => {
     const newValue = e.target.value;
     setValue(newValue);
+    onTyping?.();
 
     const cursor = e.target.selectionStart ?? newValue.length;
     const uptoCursor = newValue.slice(0, cursor);
@@ -203,13 +215,19 @@ export default function MessageComposer({
       for (const file of Array.from(files)) {
         const path = `attachments/${Date.now()}_${file.name}`;
         const storageRef = sRef(storage, path);
-        await uploadBytes(storageRef, file);
+        const { ciphertext, ivB64, keyB64, contentType } = await encryptBlob(file);
+        await uploadBytes(storageRef, ciphertext);
         const url = await getDownloadURL(storageRef);
 
         const kind = file.type.startsWith("image/") ? "image" : "file";
+        // Der Einmal-Schlüssel (keyB64/ivB64) steht hier im Klartext, weil
+        // dieser gesamte Marker gleich als Nachrichtentext genauso
+        // verschlüsselt wird wie jede normale Textnachricht — Storage sieht
+        // dadurch nur Ciphertext, der Schlüssel selbst verlässt nie den
+        // E2EE-geschützten Nachrichteninhalt.
         const marker = `ATTACH::${kind}::${url}::${encodeURIComponent(
           file.name
-        )}`;
+        )}::${ivB64}::${keyB64}::${encodeURIComponent(contentType)}`;
         await onSend(marker);
       }
     } catch (err) {
@@ -222,6 +240,10 @@ export default function MessageComposer({
 
   const addEmoji = (emoji: string) => setValue((v) => v + emoji);
 
+  const handleCreatePoll = async (question: string, options: string[]) => {
+    await onSend(`${POLL_MARKER}${JSON.stringify({ q: question, o: options })}`);
+  };
+
   return (
     <div className="input-pill items-center gap-2 px-3 md:px-5 py-2 md:py-3">
       <button
@@ -233,6 +255,25 @@ export default function MessageComposer({
       >
         <Plus size={18} />
       </button>
+
+      {enablePolls && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowPoll(true)}
+            className="btn-icon shrink-0 w-8 h-8 text-[var(--foreground-secondary)]"
+            title="Umfrage erstellen"
+            disabled={sending || disabled}
+          >
+            <BarChart3 size={18} />
+          </button>
+          <PollComposerModal
+            isOpen={showPoll}
+            onClose={() => setShowPoll(false)}
+            onCreate={handleCreatePoll}
+          />
+        </>
+      )}
 
       <input
         ref={fileInputRef}
@@ -293,6 +334,7 @@ export default function MessageComposer({
         {showEmoji && (
           <div ref={emojiRef} className="absolute bottom-11 right-0 z-50">
             <EmojiPicker
+              customEmojis={customEmojis}
               onSelect={(e) => {
                 addEmoji(e);
                 setShowEmoji(false);

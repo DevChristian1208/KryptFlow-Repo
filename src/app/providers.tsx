@@ -13,6 +13,7 @@ import { NotificationProvider } from "./Context/NotificationContext";
 import { ThemeProvider } from "./Context/ThemeContext";
 import { SessionProvider } from "./Context/SessionContext";
 import { ProfileDialogProvider } from "./Context/ProfileDialogContext";
+import { SavedMessagesProvider } from "./Context/SavedMessagesContext";
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -36,7 +37,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
                 <ServerProvider>
                   <ChannelProvider>
                     <DirectProvider>
-                      <ProfileDialogProvider>{children}</ProfileDialogProvider>
+                      <SavedMessagesProvider>
+                        <ProfileDialogProvider>{children}</ProfileDialogProvider>
+                      </SavedMessagesProvider>
                     </DirectProvider>
                   </ChannelProvider>
                 </ServerProvider>

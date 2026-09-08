@@ -36,6 +36,27 @@ service firebase.storage {
         && request.resource.contentType.matches('image/.*');
     }
 
+    match /serverEmojis/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && fileName.matches(request.auth.uid + '_.*')
+        && request.resource.size < 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Chat-Anhänge (siehe MessageComposer.tsx): Dateiname trägt keinen
+    // uid-Präfix (Format "<timestamp>_<originalname>"), da mehrere
+    // Kanal-/DM-Mitglieder auf dieselbe Datei zugreifen. Seit der
+    // Anhang-Verschlüsselung landen hier nur noch AES-GCM-Ciphertext-Bytes
+    // als "application/octet-stream" — der ursprüngliche Dateityp steckt
+    // (mit-verschlüsselt) im Nachrichtentext, nicht mehr im Storage-Objekt.
+    match /attachments/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 15 * 1024 * 1024
+        && request.resource.contentType == 'application/octet-stream';
+    }
+
     // Alles andere: kein bekannter Anwendungsfall, standardmäßig verboten.
     match /{allPaths=**} {
       allow read, write: if false;

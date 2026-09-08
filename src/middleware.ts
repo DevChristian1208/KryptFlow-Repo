@@ -25,7 +25,9 @@ export function middleware(request: NextRequest) {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""} https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://firebasestorage.googleapis.com https://lh3.googleusercontent.com",
+    // https: (statt einzelner Domains) bewusst nötig für Link-Vorschau-Bilder
+    // — die stammen von beliebigen Websites, die man in Nachrichten verlinkt.
+    "img-src 'self' data: blob: https:",
     "font-src 'self'",
     "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebasedatabase.app https://content-firebaseappcheck.googleapis.com https://www.google-analytics.com https://region1.google-analytics.com",
     "frame-src https://www.google.com/recaptcha/",

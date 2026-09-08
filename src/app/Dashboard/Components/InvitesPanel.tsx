@@ -149,7 +149,7 @@ export default function InvitesPanel() {
                   alt={req.fromName}
                   width={32}
                   height={32}
-                  className="rounded-full"
+                  className="w-8 h-8 rounded-full object-cover"
                 />
                 <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-[var(--surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center">
                   <UserPlus size={9} className="text-[var(--foreground-secondary)]" />

@@ -11,12 +11,25 @@ import {
   X,
   Hash,
   Server as ServerIcon,
+  Pin,
+  PinOff,
+  BarChart3,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 import { useUser } from "@/app/Context/UserContext";
+import { useSavedMessages } from "@/app/Context/SavedMessagesContext";
 import { useToast } from "@/app/Context/ToastContext";
 import { useNotifications } from "@/app/Context/NotificationContext";
 import { useProfileDialog } from "@/app/Context/ProfileDialogContext";
-import type { Message, ReactionGroup, Member } from "@/app/Context/ChannelContext";
+import { decryptBlob } from "@/app/lib/crypto";
+import type {
+  Message,
+  ReactionGroup,
+  Member,
+  EditHistoryEntry,
+} from "@/app/Context/ChannelContext";
+import LinkPreview from "./LinkPreview";
 import EmojiPicker from "./EmojiPicker";
 import MessageComposer from "./MessageComposer";
 
@@ -123,7 +136,14 @@ function ClickableAvatar({
 }) {
   if (!uid) {
     return (
-      <Image src={src} alt={alt} width={size} height={size} className={className} />
+      <Image
+        src={src}
+        alt={alt}
+        width={size}
+        height={size}
+        style={{ width: size, height: size }}
+        className={`object-cover ${className || ""}`}
+      />
     );
   }
   return (
@@ -133,7 +153,8 @@ function ClickableAvatar({
         alt={alt}
         width={size}
         height={size}
-        className={`${className || ""} hover:opacity-80 transition`}
+        style={{ width: size, height: size }}
+        className={`object-cover ${className || ""} hover:opacity-80 transition`}
       />
     </button>
   );
@@ -170,9 +191,57 @@ function highlightMentions(text: string, myName?: string): ReactNode {
   return nodes;
 }
 
-type ParsedAttachment =
-  | { kind: "image"; url: string; name: string }
-  | { kind: "file"; url: string; name: string };
+const EMOJI_SHORTCODE_RE = /:([a-z0-9_]+):/g;
+
+function substituteCustomEmojis(
+  nodes: ReactNode,
+  emojis?: { id: string; name: string; url: string }[]
+): ReactNode {
+  if (!emojis || emojis.length === 0) return nodes;
+  const byName = new Map(emojis.map((e) => [e.name, e.url]));
+
+  function processString(text: string, keyPrefix: string): ReactNode[] {
+    const out: ReactNode[] = [];
+    let lastIndex = 0;
+    let i = 0;
+    EMOJI_SHORTCODE_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = EMOJI_SHORTCODE_RE.exec(text))) {
+      const url = byName.get(m[1]);
+      if (!url) continue;
+      if (m.index > lastIndex) out.push(text.slice(lastIndex, m.index));
+      out.push(
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={`${keyPrefix}-${i++}`}
+          src={url}
+          alt={`:${m[1]}:`}
+          className="inline-block w-5 h-5 align-text-bottom mx-0.5"
+        />
+      );
+      lastIndex = m.index + m[0].length;
+    }
+    if (lastIndex < text.length) out.push(text.slice(lastIndex));
+    return out.length ? out : [text];
+  }
+
+  const arr = Array.isArray(nodes) ? nodes : [nodes];
+  return arr.flatMap((n, idx) =>
+    typeof n === "string" ? processString(n, `ce-${idx}`) : n
+  );
+}
+
+type ParsedAttachment = {
+  kind: "image" | "file";
+  url: string;
+  name: string;
+  /** Nur bei Anhängen, die nach Einführung der Anhang-Verschlüsselung
+   * gesendet wurden — ältere Anhänge liegen noch unverschlüsselt in Storage
+   * und werden weiterhin direkt über `url` angezeigt. */
+  ivB64?: string;
+  keyB64?: string;
+  contentType?: string;
+};
 
 function parseAttachment(text: string): ParsedAttachment | null {
   if (!text.startsWith("ATTACH::")) return null;
@@ -186,7 +255,197 @@ function parseAttachment(text: string): ParsedAttachment | null {
     : kind === "image"
     ? "Bild"
     : "Datei";
-  return { kind, url, name };
+  const ivB64 = parts[4] || undefined;
+  const keyB64 = parts[5] || undefined;
+  const contentType = parts[6] ? decodeURIComponent(parts[6]) : undefined;
+  return { kind, url, name, ivB64, keyB64, contentType };
+}
+
+/** Lädt einen Anhang und liefert eine lokale Object-URL — entschlüsselt, wenn
+ * `ivB64`/`keyB64` vorhanden sind (siehe MessageComposer.tsx), sonst wird die
+ * Storage-URL unverändert durchgereicht (Alt-Anhänge von vor der
+ * Verschlüsselungs-Umstellung). Object-URLs werden beim Unmount wieder
+ * freigegeben, damit sie nicht im Speicher hängen bleiben. */
+function useAttachmentUrl(att: ParsedAttachment): {
+  url: string | null;
+  error: boolean;
+} {
+  const [state, setState] = useState<{ url: string | null; error: boolean }>(
+    att.keyB64 ? { url: null, error: false } : { url: att.url, error: false }
+  );
+
+  useEffect(() => {
+    if (!att.keyB64 || !att.ivB64) {
+      setState({ url: att.url, error: false });
+      return;
+    }
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setState({ url: null, error: false });
+    (async () => {
+      try {
+        const res = await fetch(att.url);
+        const buf = await res.arrayBuffer();
+        const blob = await decryptBlob(
+          buf,
+          att.ivB64!,
+          att.keyB64!,
+          att.contentType || "application/octet-stream"
+        );
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setState({ url: objectUrl, error: false });
+      } catch (e) {
+        console.error("[MessageList] Anhang-Entschlüsselung fehlgeschlagen:", e);
+        if (!cancelled) setState({ url: null, error: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [att.url, att.ivB64, att.keyB64, att.contentType]);
+
+  return state;
+}
+
+function AttachmentImage({ att, mine }: { att: ParsedAttachment; mine: boolean }) {
+  const { url, error } = useAttachmentUrl(att);
+  if (error) {
+    return (
+      <p className={`text-sm italic ${mine ? "text-white" : "text-[var(--foreground-secondary)]"}`}>
+        Bild konnte nicht entschlüsselt werden.
+      </p>
+    );
+  }
+  if (!url) {
+    return (
+      <p className={`text-sm italic ${mine ? "text-white" : "text-[var(--foreground-secondary)]"}`}>
+        Bild wird entschlüsselt…
+      </p>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noreferrer">
+      {/* `img` beibehalten: entschlüsselte Object-URLs bzw. externe URLs ohne next/image Domain-Konfig */}
+      <img
+        src={url}
+        alt={att.name}
+        className="rounded-lg max-h-[320px] max-w-full object-contain"
+      />
+    </a>
+  );
+}
+
+function AttachmentFile({ att, mine }: { att: ParsedAttachment; mine: boolean }) {
+  const { url, error } = useAttachmentUrl(att);
+  const className = `underline ${mine ? "text-white" : "text-[var(--accent)]"}`;
+  if (error) {
+    return <p className={`text-sm italic ${mine ? "text-white" : "text-[var(--foreground-secondary)]"}`}>Datei konnte nicht entschlüsselt werden.</p>;
+  }
+  if (!url) {
+    return <span className={className}>📎 {att.name} (wird entschlüsselt…)</span>;
+  }
+  return (
+    <a href={url} download={att.name} target="_blank" rel="noreferrer" className={className}>
+      📎 {att.name}
+    </a>
+  );
+}
+
+type ParsedPoll = { question: string; options: string[] };
+
+function parsePoll(text: string): ParsedPoll | null {
+  if (!text.startsWith("POLL::")) return null;
+  try {
+    const raw = JSON.parse(text.slice("POLL::".length)) as { q?: string; o?: string[] };
+    if (!raw.q || !Array.isArray(raw.o) || raw.o.length < 2) return null;
+    return { question: raw.q, options: raw.o };
+  } catch {
+    return null;
+  }
+}
+
+function PollCard({
+  poll,
+  messageId,
+  votes,
+  myUid,
+  onVote,
+}: {
+  poll: ParsedPoll;
+  messageId: string;
+  votes: Record<string, number>;
+  myUid?: string;
+  onVote: (messageId: string, optionIndex: number) => Promise<void>;
+}) {
+  const [voting, setVoting] = useState(false);
+  const counts = poll.options.map(
+    (_, i) => Object.values(votes).filter((v) => v === i).length
+  );
+  const total = counts.reduce((a, b) => a + b, 0);
+  const myVote = myUid !== undefined ? votes[myUid] : undefined;
+
+  async function handleVote(i: number) {
+    if (voting) return;
+    setVoting(true);
+    try {
+      await onVote(messageId, i);
+    } finally {
+      setVoting(false);
+    }
+  }
+
+  return (
+    <div className="min-w-[220px] max-w-xs">
+      <p className="font-semibold mb-2 flex items-center gap-1.5">
+        <BarChart3 size={14} className="shrink-0" />
+        {poll.question}
+      </p>
+      <div className="space-y-1.5">
+        {poll.options.map((opt, i) => {
+          const pct = total > 0 ? Math.round((counts[i] / total) * 100) : 0;
+          const mine = myVote === i;
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={voting}
+              onClick={() => handleVote(i)}
+              className={`relative w-full text-left rounded-lg overflow-hidden border px-2.5 py-1.5 text-xs transition ${
+                mine
+                  ? "border-[var(--accent)]"
+                  : "border-[var(--border-subtle)] hover:border-[var(--accent)]"
+              }`}
+            >
+              <div
+                className="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_18%,transparent)]"
+                style={{ width: `${pct}%` }}
+              />
+              <div className="relative flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1">
+                  {mine && <Check size={12} className="shrink-0" />}
+                  {opt}
+                </span>
+                <span className="shrink-0 opacity-70">
+                  {counts[i]} · {pct}%
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[10px] opacity-60 mt-1.5">
+        {total} {total === 1 ? "Stimme" : "Stimmen"}
+      </p>
+    </div>
+  );
+}
+
+const URL_RE = /https?:\/\/[^\s]+/i;
+function extractFirstUrl(text: string): string | null {
+  const match = text.match(URL_RE);
+  return match ? match[0] : null;
 }
 
 function formatTime(ts?: number) {
@@ -217,6 +476,15 @@ type MessageListProps = {
     mentionedUids?: string[]
   ) => Promise<void>;
   onDeleteThreadReply: (parentMessageId: string, replyId: string) => Promise<void>;
+  pinnedMessageIds?: Set<string>;
+  canPin?: boolean;
+  onPinMessage?: (messageId: string) => Promise<void>;
+  onUnpinMessage?: (messageId: string) => Promise<void>;
+  onGetEditHistory?: (messageId: string) => Promise<EditHistoryEntry[]>;
+  customEmojis?: { id: string; name: string; url: string }[];
+  pollVotesByMessage?: Record<string, Record<string, number>>;
+  onVotePoll?: (messageId: string, optionIndex: number) => Promise<void>;
+  saveContext?: { kind: "channel"; channelId: string } | { kind: "dm"; otherUid: string };
 };
 
 export default function MessageList({
@@ -231,16 +499,47 @@ export default function MessageList({
   onSubscribeThread,
   onSendThreadReply,
   onDeleteThreadReply,
+  pinnedMessageIds,
+  canPin,
+  onPinMessage,
+  onUnpinMessage,
+  onGetEditHistory,
+  customEmojis,
+  pollVotesByMessage,
+  onVotePoll,
+  saveContext,
 }: MessageListProps) {
   const { user: me } = useUser();
   const { openProfile } = useProfileDialog();
   const { showToast } = useToast();
+  const { savedMessages, saveMessage, unsaveMessage } = useSavedMessages();
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
+  const [historyOpenId, setHistoryOpenId] = useState<string | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<EditHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  async function toggleHistory(messageId: string) {
+    if (historyOpenId === messageId) {
+      setHistoryOpenId(null);
+      return;
+    }
+    setHistoryOpenId(messageId);
+    if (!onGetEditHistory) return;
+    setHistoryLoading(true);
+    try {
+      setHistoryEntries(await onGetEditHistory(messageId));
+    } catch {
+      setHistoryEntries([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
 
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const threadUnsubs = useRef<Record<string, () => void>>({});
@@ -315,6 +614,42 @@ export default function MessageList({
     }
   }
 
+  function findSavedEntry(messageId: string) {
+    if (!saveContext) return undefined;
+    const scopeId = saveContext.kind === "channel" ? saveContext.channelId : saveContext.otherUid;
+    return savedMessages.find(
+      (s) =>
+        s.sourceKind === saveContext.kind &&
+        (s.channelId || s.otherUid) === scopeId &&
+        s.originalMessageId === messageId
+    );
+  }
+
+  async function handleToggleSave(m: Message) {
+    if (!saveContext || savingId === m.id) return;
+    setSavingId(m.id);
+    try {
+      const existing = findSavedEntry(m.id);
+      if (existing) {
+        await unsaveMessage(existing.id);
+      } else {
+        await saveMessage({
+          text: m.text,
+          senderUid: m.senderUid || "",
+          sourceKind: saveContext.kind,
+          channelId: saveContext.kind === "channel" ? saveContext.channelId : undefined,
+          otherUid: saveContext.kind === "dm" ? saveContext.otherUid : undefined,
+          originalMessageId: m.id,
+          originalCreatedAt: m.createdAt || Date.now(),
+        });
+      }
+    } catch {
+      showToast("Aktion fehlgeschlagen.", "error");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   function renderBubble(
     m: Message,
     mine: boolean,
@@ -323,8 +658,9 @@ export default function MessageList({
   ) {
     if (m.kind) return <InviteCard m={m} />;
 
-    const att = parseAttachment(m.text);
-    const editable = mine && !att && !m.deleted && editingId !== m.id;
+    const poll = !m.deleted ? parsePoll(m.text) : null;
+    const att = poll ? null : parseAttachment(m.text);
+    const editable = mine && !att && !poll && !m.deleted && editingId !== m.id;
     const deletable = mine && !m.deleted && deletingId !== m.id;
     const isEditing = editingId === m.id;
     const isDeleting = deletingId === m.id;
@@ -338,10 +674,69 @@ export default function MessageList({
             <span className="font-semibold text-[var(--foreground)]">{m.user.name}</span>
           )}{" "}
           <span className="ml-1">{formatTime(m.createdAt)}</span>
-          {m.edited && <span className="ml-1 italic">(bearbeitet)</span>}
+          {m.edited && (
+            <button
+              type="button"
+              onClick={() => toggleHistory(m.id)}
+              className="ml-1 italic underline decoration-dotted"
+            >
+              (bearbeitet)
+            </button>
+          )}
+          {pinnedMessageIds?.has(m.id) && (
+            <span className="ml-1 inline-flex items-center gap-0.5">
+              <Pin size={10} /> angeheftet
+            </span>
+          )}
         </div>
 
+        {historyOpenId === m.id && (
+          <div className="card-surface p-2 mb-1 text-xs max-w-xs space-y-1">
+            {historyLoading ? (
+              <p className="text-[var(--foreground-secondary)]">Lädt…</p>
+            ) : historyEntries.length === 0 ? (
+              <p className="text-[var(--foreground-secondary)]">Keine früheren Fassungen.</p>
+            ) : (
+              historyEntries.map((h) => (
+                <div key={h.id} className="border-b border-[var(--border-subtle)] last:border-0 pb-1">
+                  <p className="text-[var(--foreground-secondary)]">{formatTime(h.editedAt)}</p>
+                  <p className="whitespace-pre-wrap break-words">{h.text}</p>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
         <div className="flex items-center gap-1">
+          {saveContext && !poll && !att && !m.deleted && (
+            <button
+              type="button"
+              disabled={savingId === m.id}
+              onClick={() => handleToggleSave(m)}
+              className="btn-icon w-7 h-7 shrink-0 opacity-0 group-hover/bubble:opacity-100 text-[var(--foreground-secondary)]"
+              aria-label={findSavedEntry(m.id) ? "Aus Gespeichert entfernen" : "Nachricht speichern"}
+              title={findSavedEntry(m.id) ? "Aus Gespeichert entfernen" : "Nachricht speichern"}
+            >
+              {findSavedEntry(m.id) ? (
+                <BookmarkCheck size={14} className="text-[var(--accent)]" />
+              ) : (
+                <Bookmark size={14} />
+              )}
+            </button>
+          )}
+          {canPin && onPinMessage && onUnpinMessage && !m.deleted && (
+            <button
+              type="button"
+              onClick={() =>
+                pinnedMessageIds?.has(m.id) ? onUnpinMessage(m.id) : onPinMessage(m.id)
+              }
+              className="btn-icon w-7 h-7 shrink-0 opacity-0 group-hover/bubble:opacity-100 text-[var(--foreground-secondary)]"
+              aria-label={pinnedMessageIds?.has(m.id) ? "Lösen" : "Anheften"}
+              title={pinnedMessageIds?.has(m.id) ? "Nachricht lösen" : "Nachricht anheften"}
+            >
+              {pinnedMessageIds?.has(m.id) ? <PinOff size={14} /> : <Pin size={14} />}
+            </button>
+          )}
           {mine && editable && (
             <button
               type="button"
@@ -427,34 +822,37 @@ export default function MessageList({
                   : "bg-[var(--border-subtle)] text-[var(--foreground)] rounded-bl-md"
               } ${m.deleted ? "italic opacity-70" : ""}`}
             >
-              {att ? (
+              {poll ? (
+                <PollCard
+                  poll={poll}
+                  messageId={m.id}
+                  votes={pollVotesByMessage?.[m.id] || {}}
+                  myUid={me?.id}
+                  onVote={onVotePoll || (async () => {})}
+                />
+              ) : att ? (
                 att.kind === "image" ? (
-                  <a href={att.url} target="_blank" rel="noreferrer">
-                    {/* `img` beibehalten: externe URLs ohne next/image Domain-Konfig */}
-                    <img
-                      src={att.url}
-                      alt={att.name}
-                      className="rounded-lg max-h-[320px] max-w-full object-contain"
-                    />
-                  </a>
+                  <AttachmentImage att={att} mine={mine} />
                 ) : (
-                  <a
-                    href={att.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={`underline ${mine ? "text-white" : "text-[var(--accent)]"}`}
-                  >
-                    📎 {att.name}
-                  </a>
+                  <AttachmentFile att={att} mine={mine} />
                 )
               ) : (
                 <p className="whitespace-pre-wrap break-words">
-                  {m.deleted ? m.text : highlightMentions(m.text, me?.name)}
+                  {m.deleted
+                    ? m.text
+                    : substituteCustomEmojis(
+                        highlightMentions(m.text, me?.name),
+                        customEmojis
+                      )}
                 </p>
               )}
             </div>
           )}
         </div>
+
+        {!att && !m.deleted && !isEditing && extractFirstUrl(m.text) && (
+          <LinkPreview url={extractFirstUrl(m.text)!} />
+        )}
 
         {!compact && !m.deleted && (
           <>

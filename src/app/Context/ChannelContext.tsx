@@ -19,6 +19,7 @@ import {
   get,
   update,
   runTransaction,
+  onDisconnect,
 } from "firebase/database";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/app/lib/firebase";
@@ -61,6 +62,7 @@ type ChannelDb = {
   members?: Record<string, true>;
   serverId?: string;
   restricted?: boolean;
+  announcementOnly?: boolean;
 };
 
 type ChannelMessageDb = {
@@ -85,6 +87,12 @@ type ReactionDb = EncryptedPayload & {
   epochId?: string;
 };
 
+type PollVoteDb = EncryptedPayload & {
+  signature: string;
+  createdAt: number;
+  epochId?: string;
+};
+
 export type Channel = {
   id: string;
   name: string;
@@ -95,6 +103,7 @@ export type Channel = {
   members?: Record<string, true>;
   serverId?: string;
   restricted?: boolean;
+  announcementOnly?: boolean;
 };
 
 export type ReactionGroup = { emoji: string; uids: string[] };
@@ -134,15 +143,19 @@ type ChannelContextType = {
   channelMembers: Member[];
   messages: Message[];
   reactionsByMessage: Record<string, ReactionGroup[]>;
+  pollVotesByMessage: Record<string, Record<string, number>>;
+  votePoll: (messageId: string, optionIndex: number) => Promise<void>;
   threadCountByMessage: Record<string, number>;
   threadMessagesByParent: Record<string, Message[]>;
   setActiveChannelId: (id: string | null) => void;
   createChannel: (
     name: string,
     description?: string,
-    restricted?: boolean
+    restricted?: boolean,
+    opts?: { serverIdOverride?: string; skipRateLimit?: boolean; announcementOnly?: boolean }
   ) => Promise<void>;
   setChannelRestricted: (channelId: string, restricted: boolean) => Promise<void>;
+  setChannelAnnouncementOnly: (channelId: string, announcementOnly: boolean) => Promise<void>;
   deleteChannel: (channelId: string) => Promise<void>;
   inviteToChannel: (channelId: string, channelName: string, targetUid: string) => Promise<void>;
   sendMessage: (text: string, mentionedUids?: string[]) => Promise<void>;
@@ -156,9 +169,17 @@ type ChannelContextType = {
     mentionedUids?: string[]
   ) => Promise<void>;
   deleteThreadReply: (parentMessageId: string, replyId: string) => Promise<void>;
+  pinnedMessageIds: Set<string>;
+  pinMessage: (messageId: string) => Promise<void>;
+  unpinMessage: (messageId: string) => Promise<void>;
+  getMessageEditHistory: (messageId: string) => Promise<EditHistoryEntry[]>;
+  typingUserIds: string[];
+  notifyTyping: () => void;
   loading: boolean;
   error: string | null;
 };
+
+export type EditHistoryEntry = { id: string; text: string; editedAt: number };
 
 type NewUserDb = {
   authUid: string;
@@ -293,12 +314,18 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
   const [reactionsByMessage, setReactionsByMessage] = useState<
     Record<string, ReactionGroup[]>
   >({});
+  const [pollVotesByMessage, setPollVotesByMessage] = useState<
+    Record<string, Record<string, number>>
+  >({});
   const [threadCountByMessage, setThreadCountByMessage] = useState<
     Record<string, number>
   >({});
   const [threadMessagesByParent, setThreadMessagesByParent] = useState<
     Record<string, Message[]>
   >({});
+  const [pinnedMessageIds, setPinnedMessageIds] = useState<Set<string>>(new Set());
+  const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
+  const lastTypingNotifyRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -306,6 +333,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
   const channelEpochKeyCache = useRef(new Map<string, CryptoKey>());
   const profileCache = useRef(new Map<string, Profile>());
   const reactionUnsubs = useRef<Record<string, () => void>>({});
+  const pollVoteUnsubs = useRef<Record<string, () => void>>({});
   const threadCountUnsubs = useRef<Record<string, () => void>>({});
 
   const resolveProfile = useCallback(
@@ -407,7 +435,16 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       const channelKey = await generateChannelKey();
       const envelopes: Record<string, ChannelKeyEnvelope> = {};
       for (const uid of memberUids) {
-        const envelope = await wrapChannelKeyForMember(channelKey, uid);
+        // bypassCache: das Anlegen einer Epoche passiert selten (max. 1x pro
+        // Kanal/Tag) — die minimale Extra-Latenz hier ist es wert, damit ein
+        // bis zu 60s alter zwischengespeicherter Public Key (siehe
+        // PUBLIC_KEY_CACHE_TTL_MS) niemals dazu führt, dass ausgerechnet der
+        // Envelope für ein gerade erst (neu) veröffentlichtes Mitglied —
+        // ggf. sogar für einen selbst — gegen den falschen Schlüssel
+        // gewrappt wird und damit für immer unentschlüsselbar bliebe.
+        const envelope = await wrapChannelKeyForMember(channelKey, uid, {
+          bypassCache: true,
+        });
         if (envelope) envelopes[uid] = envelope;
       }
       if (Object.keys(envelopes).length === 0) return;
@@ -432,7 +469,30 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       const myServerIds = new Set(servers.map((s) => s.id));
       const chansSnap = await get(ref(db, "channels"));
       const chans = (chansSnap.val() || {}) as Record<string, ChannelDb>;
+      const relevantEntries = Object.entries(chans).filter(
+        ([, chan]) => chan.serverId && myServerIds.has(chan.serverId)
+      );
+
+      // Server-Mitgliederlisten vorab EINMAL pro Server parallel laden
+      // (statt verschachtelt pro Kanal sequenziell) — mehrere Kanäle
+      // desselben Servers teilen sich denselben Fetch.
+      const neededServerIds = Array.from(
+        new Set(
+          relevantEntries
+            .filter(([, chan]) => !chan.restricted)
+            .map(([, chan]) => chan.serverId!)
+        )
+      );
       const serverMembersCache = new Map<string, string[]>();
+      await Promise.all(
+        neededServerIds.map(async (sid) => {
+          const smSnap = await get(ref(db, `serverMembers/${sid}`));
+          serverMembersCache.set(
+            sid,
+            Object.keys((smSnap.val() as Record<string, unknown>) || {})
+          );
+        })
+      );
 
       // Mitgliedschaft selbst wird hier bewusst NICHT vergeben — bei
       // eingeschränkten Kanälen läuft Beitritt ausschließlich über eine
@@ -443,83 +503,100 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       // Envelopes nach — bei nicht-eingeschränkten Kanälen für ALLE
       // aktuellen Server-Mitglieder, bei eingeschränkten nur für die
       // explizit eingetragenen.
-      for (const cid of Object.keys(chans)) {
-        const chan = chans[cid];
-        if (!chan.serverId || !myServerIds.has(chan.serverId)) continue;
-
-        let memberUids: string[];
-        if (chan.restricted) {
-          if (!chan.members?.[user.id]) continue;
-          memberUids = Object.keys({ ...(chan.members || {}), [user.id]: true });
-        } else {
-          let cached = serverMembersCache.get(chan.serverId);
-          if (!cached) {
-            const smSnap = await get(ref(db, `serverMembers/${chan.serverId}`));
-            cached = Object.keys((smSnap.val() as Record<string, unknown>) || {});
-            serverMembersCache.set(chan.serverId, cached);
-          }
-          memberUids = cached;
-        }
-
-        // Legacy (flacher, dauerhafter) Channel-Key — bleibt für Alt-
-        // Nachrichten ohne epochId als Fallback bestehen.
-        const channelKey = await getOwnChannelKey(cid);
-        if (channelKey) {
-          const keysSnap = await get(ref(db, `channelKeys/${cid}`));
-          const existingKeys =
-            (keysSnap.val() as Record<string, ChannelKeyEnvelope> | null) || {};
-          for (const uid of memberUids) {
-            const existing = existingKeys[uid];
-            // Nicht nur "fehlt komplett", sondern auch "ist für ein
-            // inzwischen ersetztes Schlüsselpaar gewrappt" nachliefern —
-            // sonst bleibt ein Mitglied nach einem Origin-/Geräte-Wechsel
-            // (neues Schlüsselpaar, siehe ensureIdentityKeys) dauerhaft mit
-            // einem für sich selbst unentschlüsselbaren Envelope stehen.
-            const currentVersion = await getPublicKeyVersion(uid);
-            if (existing && existing.forKeyVersion === currentVersion) continue;
-            const envelope = await wrapChannelKeyForMember(channelKey, uid);
-            if (envelope) {
-              await set(ref(db, `channelKeys/${cid}/${uid}`), envelope);
-            }
-          }
-        }
-
-        // Perioden-Epochen: fehlende Envelopes für alle bereits
-        // existierenden Epochen nachliefern (nur möglich, wenn man selbst
-        // schon einen gültigen Envelope für diese Epoche hat), plus die
-        // aktuelle Epoche anlegen, falls sie noch gar nicht existiert.
-        const epochsSnap = await get(ref(db, `channelKeyEpochs/${cid}`));
-        const epochs =
-          (epochsSnap.val() as Record<string, Record<string, ChannelKeyEnvelope>> | null) ||
-          {};
-
-        for (const [epochId, envelopes] of Object.entries(epochs)) {
-          const myEnvelope = envelopes[user.id];
-          if (!myEnvelope) continue;
-
-          let epochKey: CryptoKey;
-          try {
-            epochKey = await unwrapChannelKey(user.id, myEnvelope);
-          } catch {
-            continue;
+      //
+      // Alle Kanäle laufen parallel statt nacheinander: bei mehreren
+      // Servern/Kanälen sammelte sich hier sonst schnell ein Vielfaches an
+      // sequenziellen Firebase-Roundtrips an — genau die Zeit, die einem
+      // gerade beigetretenen Mitglied fehlt, dessen sendMessage() nur ein
+      // kurzes Zeitfenster auf genau diesen Nachlieferungs-Lauf wartet
+      // (siehe getCurrentChannelEpochKey).
+      await Promise.all(
+        relevantEntries.map(async ([cid, chan]) => {
+          let memberUids: string[];
+          if (chan.restricted) {
+            if (!chan.members?.[user.id]) return;
+            memberUids = Object.keys({ ...(chan.members || {}), [user.id]: true });
+          } else {
+            memberUids = serverMembersCache.get(chan.serverId!) || [];
           }
 
-          for (const uid of memberUids) {
-            const existing = envelopes[uid];
-            const currentVersion = await getPublicKeyVersion(uid);
-            if (existing && existing.forKeyVersion === currentVersion) continue;
-            const envelope = await wrapChannelKeyForMember(epochKey, uid);
-            if (envelope) {
-              await set(ref(db, `channelKeyEpochs/${cid}/${epochId}/${uid}`), envelope);
-            }
+          // Legacy (flacher, dauerhafter) Channel-Key — bleibt für Alt-
+          // Nachrichten ohne epochId als Fallback bestehen.
+          const channelKey = await getOwnChannelKey(cid);
+          if (channelKey) {
+            const keysSnap = await get(ref(db, `channelKeys/${cid}`));
+            const existingKeys =
+              (keysSnap.val() as Record<string, ChannelKeyEnvelope> | null) || {};
+            await Promise.all(
+              memberUids.map(async (uid) => {
+                const existing = existingKeys[uid];
+                // Nicht nur "fehlt komplett", sondern auch "ist für ein
+                // inzwischen ersetztes Schlüsselpaar gewrappt" nachliefern —
+                // sonst bleibt ein Mitglied nach einem Origin-/Geräte-Wechsel
+                // (neues Schlüsselpaar, siehe ensureIdentityKeys) dauerhaft
+                // mit einem für sich selbst unentschlüsselbaren Envelope stehen.
+                const currentVersion = await getPublicKeyVersion(uid, {
+                  bypassCache: true,
+                });
+                if (existing && existing.forKeyVersion === currentVersion) return;
+                const envelope = await wrapChannelKeyForMember(channelKey, uid, {
+                  bypassCache: true,
+                });
+                if (envelope) {
+                  await set(ref(db, `channelKeys/${cid}/${uid}`), envelope);
+                }
+              })
+            );
           }
-        }
 
-        const currentEpochId = epochIdForTimestamp(CHANNEL_EPOCH_DURATION_MS);
-        if (!epochs[currentEpochId]) {
-          await claimChannelEpoch(cid, currentEpochId, memberUids);
-        }
-      }
+          // Perioden-Epochen: fehlende Envelopes für alle bereits
+          // existierenden Epochen nachliefern (nur möglich, wenn man selbst
+          // schon einen gültigen Envelope für diese Epoche hat), plus die
+          // aktuelle Epoche anlegen, falls sie noch gar nicht existiert.
+          const epochsSnap = await get(ref(db, `channelKeyEpochs/${cid}`));
+          const epochs =
+            (epochsSnap.val() as Record<string, Record<string, ChannelKeyEnvelope>> | null) ||
+            {};
+
+          await Promise.all(
+            Object.entries(epochs).map(async ([epochId, envelopes]) => {
+              const myEnvelope = envelopes[user.id];
+              if (!myEnvelope) return;
+
+              let epochKey: CryptoKey;
+              try {
+                epochKey = await unwrapChannelKey(user.id, myEnvelope);
+              } catch {
+                return;
+              }
+
+              await Promise.all(
+                memberUids.map(async (uid) => {
+                  const existing = envelopes[uid];
+                  const currentVersion = await getPublicKeyVersion(uid, {
+                    bypassCache: true,
+                  });
+                  if (existing && existing.forKeyVersion === currentVersion) return;
+                  const envelope = await wrapChannelKeyForMember(epochKey, uid, {
+                    bypassCache: true,
+                  });
+                  if (envelope) {
+                    await set(
+                      ref(db, `channelKeyEpochs/${cid}/${epochId}/${uid}`),
+                      envelope
+                    );
+                  }
+                })
+              );
+            })
+          );
+
+          const currentEpochId = epochIdForTimestamp(CHANNEL_EPOCH_DURATION_MS);
+          if (!epochs[currentEpochId]) {
+            await claimChannelEpoch(cid, currentEpochId, memberUids);
+          }
+        })
+      );
     } catch (e) {
       console.warn(
         "[ChannelContext] ensureUserInAllChannels fehlgeschlagen:",
@@ -561,7 +638,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         const chan = chanSnap.val() as ChannelDb | null;
         let memberUids: string[];
         if (chan?.restricted) {
-          memberUids = Object.keys(chan.members || {});
+          memberUids = Object.keys({ ...(chan.members || {}), [user!.id]: true });
         } else if (chan?.serverId) {
           const smSnap = await get(ref(db, `serverMembers/${chan.serverId}`));
           memberUids = Object.keys(
@@ -572,10 +649,27 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         }
         await claimChannelEpoch(channelId, epochId, memberUids);
         key = await getOwnChannelEpochKey(channelId, epochId);
+
+        // Selten, aber möglich: die Epoche existierte schon (z. B. von
+        // einem anderen, gerade erst beigetretenen Mitglied angelegt),
+        // enthielt aber noch keinen Umschlag für mich — claimChannelEpoch()
+        // bricht dann sofort ab (niemand überschreibt eine bestehende
+        // Epoche). Ohne fremde Hilfe (jemand mit gültigem Zugriff, dessen
+        // Client ensureUserInAllChannels erneut durchläuft) lässt sich das
+        // aus der eigenen Sitzung heraus nicht direkt reparieren — aber
+        // genau das passiert oft binnen Sekunden von selbst, sobald ein
+        // anderes, bereits eingeweihtes Mitglied gerade online ist/die App
+        // öffnet. Ein paar Mal kurz erneut nachsehen, bevor endgültig
+        // aufgegeben wird, macht diesen häufigen Fall für den Nutzer
+        // unsichtbar, statt sofort einen Fehler zu zeigen.
+        for (let attempt = 0; !key && attempt < 15; attempt++) {
+          await new Promise((r) => setTimeout(r, 1200));
+          key = await getOwnChannelEpochKey(channelId, epochId);
+        }
       }
       return key ? { epochId, key } : null;
     },
-    [getOwnChannelEpochKey, claimChannelEpoch]
+    [user, getOwnChannelEpochKey, claimChannelEpoch]
   );
 
   // Läuft nicht nur einmal beim Login, sondern bei jeder Änderung am
@@ -643,6 +737,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
           members: c.members || {},
           serverId: c.serverId,
           restricted: c.restricted,
+          announcementOnly: c.announcementOnly,
         }))
         .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
 
@@ -668,11 +763,21 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
   // ---------------------------------------------------
   useEffect(() => {
     setChannelMembers([]);
-    if (!activeChannelId) return;
+    if (!activeChannelId || !activeChannel) return;
 
-    const r = ref(db, `channels/${activeChannelId}/members`);
+    // Bei eingeschränkten Channels ergibt sich die Mitgliederliste aus der
+    // expliziten members-Map dort; bei offenen Channels dagegen aus ALLEN
+    // Server-Mitgliedern (channels/{id}/members enthält dort meist nur den
+    // Ersteller, siehe ensureUserInAllChannels — Zugriff läuft für alle
+    // anderen über die Server-Mitgliedschaft, nicht über diese Map). Ohne
+    // diese Unterscheidung zeigte die Mitgliederliste offener Channels
+    // fälschlich nur den Ersteller statt aller tatsächlichen Mitglieder.
+    const r =
+      activeChannel.restricted || !activeChannel.serverId
+        ? ref(db, `channels/${activeChannelId}/members`)
+        : ref(db, `serverMembers/${activeChannel.serverId}`);
     const unsub = onValue(r, (snap) => {
-      const memberIds = Object.keys((snap.val() as Record<string, true>) || {});
+      const memberIds = Object.keys((snap.val() as Record<string, unknown>) || {});
       (async () => {
         const usersSnap = await get(ref(db, "newusers"));
         const allUsers = (usersSnap.val() as Record<string, NewUserDb>) || {};
@@ -695,7 +800,41 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     });
 
     return () => unsub();
-  }, [activeChannelId, user]);
+  }, [activeChannelId, activeChannel, user]);
+
+  // ---------------------------------------------------
+  // ANGEHEFTETE NACHRICHTEN
+  // ---------------------------------------------------
+  useEffect(() => {
+    setPinnedMessageIds(new Set());
+    if (!activeChannelId) return;
+    const r = ref(db, `channelPins/${activeChannelId}`);
+    const unsub = onValue(r, (snap) => {
+      setPinnedMessageIds(new Set(Object.keys((snap.val() as Record<string, unknown>) || {})));
+    });
+    return () => unsub();
+  }, [activeChannelId]);
+
+  // ---------------------------------------------------
+  // TIPP-INDIKATOR — kein RTDB-TTL vorhanden, daher clientseitig veraltete
+  // (>6s alte) Einträge herausfiltern; der Schreiber selbst räumt seinen
+  // eigenen Eintrag zusätzlich per onDisconnect + Timeout auf (siehe
+  // notifyTyping unten).
+  // ---------------------------------------------------
+  useEffect(() => {
+    setTypingUserIds([]);
+    if (!activeChannelId || !user?.id) return;
+    const r = ref(db, `typing/${activeChannelId}`);
+    const unsub = onValue(r, (snap) => {
+      const raw = (snap.val() as Record<string, number>) || {};
+      const now = Date.now();
+      const ids = Object.entries(raw)
+        .filter(([uid, ts]) => uid !== user.id && now - ts < 6000)
+        .map(([uid]) => uid);
+      setTypingUserIds(ids);
+    });
+    return () => unsub();
+  }, [activeChannelId, user?.id]);
 
   // ---------------------------------------------------
   // CHANNEL-MESSAGES LADEN, ENTSCHLÜSSELN, VERIFIZIEREN
@@ -741,9 +880,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     // Channel gewechselt: alle bisherigen Listener + gecachten Zustand verwerfen
     Object.values(reactionUnsubs.current).forEach((fn) => fn());
     reactionUnsubs.current = {};
+    Object.values(pollVoteUnsubs.current).forEach((fn) => fn());
+    pollVoteUnsubs.current = {};
     Object.values(threadCountUnsubs.current).forEach((fn) => fn());
     threadCountUnsubs.current = {};
     setReactionsByMessage({});
+    setPollVotesByMessage({});
     setThreadCountByMessage({});
     setThreadMessagesByParent({});
   }, [activeChannelId]);
@@ -792,6 +934,48 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   }, [activeChannelId, messages, resolveChannelKey]);
 
+  // ---------------------------------------------------
+  // UMFRAGE-STIMMEN LIVE MITLESEN — exakt dasselbe Muster wie Reaktionen
+  // oben: pro Nachricht ein Listener auf channelPollVotes/{channelId}/{id},
+  // jede Stimme trägt ihre eigene epochId (unabhängig von der Epoche der
+  // Umfrage-Nachricht selbst, genau wie bei Reaktionen).
+  // ---------------------------------------------------
+  useEffect(() => {
+    if (!activeChannelId) return;
+    const currentIds = new Set(messages.map((m) => m.id));
+
+    for (const id of Object.keys(pollVoteUnsubs.current)) {
+      if (!currentIds.has(id)) {
+        pollVoteUnsubs.current[id]();
+        delete pollVoteUnsubs.current[id];
+      }
+    }
+
+    for (const id of currentIds) {
+      if (pollVoteUnsubs.current[id]) continue;
+      const r = ref(db, `channelPollVotes/${activeChannelId}/${id}`);
+      const unsub = onValue(r, (snap) => {
+        const raw = (snap.val() as Record<string, PollVoteDb> | null) || {};
+        (async () => {
+          const votes: Record<string, number> = {};
+          for (const [uid, entry] of Object.entries(raw)) {
+            const channelKey = await resolveChannelKey(activeChannelId, entry.epochId);
+            if (!channelKey) continue;
+            try {
+              const text = await decryptText(channelKey, entry);
+              const idx = Number(text);
+              if (Number.isInteger(idx)) votes[uid] = idx;
+            } catch {
+              // nicht entschlüsselbare Stimme überspringen
+            }
+          }
+          setPollVotesByMessage((prev) => ({ ...prev, [id]: votes }));
+        })();
+      });
+      pollVoteUnsubs.current[id] = () => off(r, "value", unsub);
+    }
+  }, [activeChannelId, messages, resolveChannelKey]);
+
   useEffect(() => {
     if (!activeChannelId) return;
     const currentIds = new Set(messages.map((m) => m.id));
@@ -822,14 +1006,16 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
   const createChannel = async (
     name: string,
     description?: string,
-    restricted?: boolean
+    restricted?: boolean,
+    opts?: { serverIdOverride?: string; skipRateLimit?: boolean; announcementOnly?: boolean }
   ) => {
     setLoading(true);
     setError(null);
 
     try {
       if (!user?.id) throw new Error("Nicht eingeloggt.");
-      if (!activeServerId) throw new Error("Kein Server aktiv.");
+      const targetServerId = opts?.serverIdOverride || activeServerId;
+      if (!targetServerId) throw new Error("Kein Server aktiv.");
       const clean = name.trim().toLowerCase().replace(/\s+/g, "-");
       if (!clean) throw new Error("Ungültiger Channel-Name.");
 
@@ -845,6 +1031,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       // Zugriff für alle anderen aus der Server-Mitgliedschaft (Rules),
       // eingeschränkte Kanäle laufen über das Einladungssystem
       // (channelInvites, siehe inviteToChannel).
+      //
+      // skipRateLimit: beim Anlegen mehrerer Startkanäle direkt bei der
+      // Server-Erstellung (siehe CreateOrJoinServerModal) würde die normale
+      // 5s-Drossel jeden Kanal außer dem ersten blockieren — die Regel
+      // verknüpft channels/{id} nicht zwingend mit dem Zeitstempel, daher
+      // ist das Auslassen hier unschädlich.
       try {
         await update(ref(db), {
           [`channels/${channelId}`]: {
@@ -853,11 +1045,14 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
             createdAt,
             createdByEmail: user.email || "",
             public: true,
-            serverId: activeServerId,
+            serverId: targetServerId,
             restricted: !!restricted,
+            ...(opts?.announcementOnly ? { announcementOnly: true } : {}),
             members: { [user.id]: true },
           },
-          [`rateLimits/${user.id}/lastChannelCreateAt`]: createdAt,
+          ...(opts?.skipRateLimit
+            ? {}
+            : { [`rateLimits/${user.id}/lastChannelCreateAt`]: createdAt }),
         });
       } catch (e) {
         console.error("[ChannelContext] createChannel fehlgeschlagen:", e);
@@ -867,7 +1062,9 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       const channelKey = await generateChannelKey();
       channelKeyCache.current.set(channelId, channelKey);
 
-      const ownEnvelope = await wrapChannelKeyForMember(channelKey, user.id);
+      const ownEnvelope = await wrapChannelKeyForMember(channelKey, user.id, {
+        bypassCache: true,
+      });
       if (ownEnvelope) {
         await set(ref(db, `channelKeys/${channelId}/${user.id}`), ownEnvelope);
       }
@@ -974,6 +1171,27 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const { ciphertext, iv } = await encryptText(channelKey, text);
     const signature = await signText(user.id, ciphertext);
 
+    // Alte Fassung vor dem Überschreiben als Historien-Eintrag sichern.
+    // `messages` enthält nur den bereits entschlüsselten Text, nicht das
+    // rohe Chiffrat — deshalb hier separat aus Firebase nachladen. Eigener
+    // Aufruf statt im selben Mehrfach-Schreibvorgang wie die eigentliche
+    // Bearbeitung: der Historien-Pfad ist write-once (siehe Rules), ein
+    // Fehlschlag dabei soll die eigentliche Bearbeitung nicht blockieren.
+    const rawSnap = await get(ref(db, `channelMessages/${activeChannelId}/${messageId}`));
+    const raw = rawSnap.val() as ChannelMessageDb | null;
+    if (raw?.ciphertext && raw.iv && raw.signature) {
+      const editRef = push(ref(db, `channelMessageEdits/${activeChannelId}/${messageId}`));
+      await set(editRef, {
+        ciphertext: raw.ciphertext,
+        iv: raw.iv,
+        signature: raw.signature,
+        senderUid: user.id,
+        editedAt: Date.now(),
+      }).catch((e) =>
+        console.error("[ChannelContext] Bearbeitungs-Historie konnte nicht gespeichert werden:", e)
+      );
+    }
+
     await update(ref(db, `channelMessages/${activeChannelId}/${messageId}`), {
       ciphertext,
       iv,
@@ -998,6 +1216,67 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       deletedAt: Date.now(),
     });
   };
+
+  // ---------------------------------------------------
+  // NACHRICHT ANHEFTEN/LÖSEN (Owner/Admin)
+  // ---------------------------------------------------
+  const pinMessage = async (messageId: string) => {
+    if (!user?.id) throw new Error("Nicht eingeloggt.");
+    if (!activeChannelId) throw new Error("Kein Channel aktiv.");
+    await set(ref(db, `channelPins/${activeChannelId}/${messageId}`), {
+      pinnedBy: user.id,
+      pinnedAt: Date.now(),
+    });
+  };
+
+  const unpinMessage = async (messageId: string) => {
+    if (!activeChannelId) throw new Error("Kein Channel aktiv.");
+    await set(ref(db, `channelPins/${activeChannelId}/${messageId}`), null);
+  };
+
+  // ---------------------------------------------------
+  // BEARBEITUNGS-HISTORIE EINER NACHRICHT LADEN + ENTSCHLÜSSELN — dieselbe
+  // epochId wie die aktuelle Fassung, editMessage ändert sie nie.
+  // ---------------------------------------------------
+  const getMessageEditHistory = async (messageId: string): Promise<EditHistoryEntry[]> => {
+    if (!activeChannelId) return [];
+    const snap = await get(ref(db, `channelMessageEdits/${activeChannelId}/${messageId}`));
+    const raw =
+      (snap.val() as Record<
+        string,
+        { ciphertext: string; iv: string; editedAt: number }
+      > | null) || {};
+    const msg = messages.find((m) => m.id === messageId);
+    const key = await resolveChannelKey(activeChannelId, msg?.epochId);
+    const entries = await Promise.all(
+      Object.entries(raw).map(async ([id, v]) => {
+        if (!key) return { id, text: "🔒", editedAt: v.editedAt };
+        try {
+          const text = await decryptText(key, { ciphertext: v.ciphertext, iv: v.iv });
+          return { id, text, editedAt: v.editedAt };
+        } catch {
+          return { id, text: "🔒 Nicht entschlüsselbar", editedAt: v.editedAt };
+        }
+      })
+    );
+    return entries.sort((a, b) => b.editedAt - a.editedAt);
+  };
+
+  // ---------------------------------------------------
+  // TIPP-INDIKATOR AUSLÖSEN — höchstens alle 3s ein Schreibzugriff; der
+  // eigene Eintrag räumt sich selbst nach 5s auf (kein RTDB-TTL verfügbar)
+  // und zusätzlich sofort per onDisconnect bei Verbindungsabbruch.
+  // ---------------------------------------------------
+  const notifyTyping = useCallback(() => {
+    if (!user?.id || !activeChannelId) return;
+    const now = Date.now();
+    if (now - lastTypingNotifyRef.current < 3000) return;
+    lastTypingNotifyRef.current = now;
+    const r = ref(db, `typing/${activeChannelId}/${user.id}`);
+    set(r, now).catch(() => {});
+    onDisconnect(r).remove().catch(() => {});
+    setTimeout(() => set(r, null).catch(() => {}), 5000);
+  }, [user?.id, activeChannelId]);
 
   // ---------------------------------------------------
   // THREAD-ANTWORT LÖSCHEN (Soft-Delete/Tombstone)
@@ -1049,6 +1328,34 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const { ciphertext, iv } = await encryptText(epoch.key, emoji);
     const signature = await signText(user.id, ciphertext);
     await set(ref(db, path), {
+      ciphertext,
+      iv,
+      signature,
+      createdAt: Date.now(),
+      epochId: epoch.epochId,
+    });
+  };
+
+  // ---------------------------------------------------
+  // UMFRAGE-STIMME ABGEBEN (ein aktiver Slot pro Nutzer/Nachricht, wie bei
+  // Reaktionen) — der Optionsindex selbst wird verschlüsselt gespeichert,
+  // damit auch bei Umfragen nirgends Klartext auf dem Server landet.
+  // ---------------------------------------------------
+  const votePoll = async (messageId: string, optionIndex: number) => {
+    if (!user?.id || !activeChannelId) return;
+
+    const epoch = await getCurrentChannelEpochKey(activeChannelId);
+    if (!epoch) {
+      showToast(
+        "Kein Verschlüsselungs-Schlüssel für diesen Channel verfügbar. Bitte kurz warten und erneut versuchen.",
+        "error"
+      );
+      return;
+    }
+
+    const { ciphertext, iv } = await encryptText(epoch.key, String(optionIndex));
+    const signature = await signText(user.id, ciphertext);
+    await set(ref(db, `channelPollVotes/${activeChannelId}/${messageId}/${user.id}`), {
       ciphertext,
       iv,
       signature,
@@ -1179,6 +1486,20 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
   };
 
   // ---------------------------------------------------
+  // KANAL ALS ANKÜNDIGUNGS-KANAL MARKIEREN/AUFHEBEN (Owner/Admin) —
+  // unabhängig von "restricted": steuert WER SCHREIBEN darf (alle lesenden
+  // Mitglieder vs. nur Owner/Admin), nicht WER DEN KANAL SEHEN darf.
+  // ---------------------------------------------------
+  const setChannelAnnouncementOnly = async (channelId: string, announcementOnly: boolean) => {
+    try {
+      await update(ref(db, `channels/${channelId}`), { announcementOnly });
+    } catch (e) {
+      console.error("[ChannelContext] setChannelAnnouncementOnly fehlgeschlagen:", e);
+      throw new Error("Kanal-Einstellung konnte nicht geändert werden.");
+    }
+  };
+
+  // ---------------------------------------------------
   // KANAL LÖSCHEN (Owner/Admin) — erst die Blätter (Nachrichten/Schlüssel),
   // dann den Kanal selbst, in getrennten Aufrufen: channelKeys/-Epochs' Rule
   // liest channels/{id}.serverId, das darf im selben Mehrfach-
@@ -1190,6 +1511,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       await update(ref(db), {
         [`channelMessages/${channelId}`]: null,
         [`channelMessageReactions/${channelId}`]: null,
+        [`channelPollVotes/${channelId}`]: null,
         [`channelThreadReplies/${channelId}`]: null,
         [`channelKeys/${channelId}`]: null,
         [`channelKeyEpochs/${channelId}`]: null,
@@ -1211,12 +1533,15 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         channelMembers,
         messages,
         reactionsByMessage,
+        pollVotesByMessage,
+        votePoll,
         threadCountByMessage,
         threadMessagesByParent,
         setActiveChannelId,
         createChannel,
         inviteToChannel,
         setChannelRestricted,
+        setChannelAnnouncementOnly,
         deleteChannel,
         sendMessage,
         editMessage,
@@ -1225,6 +1550,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         subscribeThread,
         sendThreadReply,
         deleteThreadReply,
+        pinnedMessageIds,
+        pinMessage,
+        unpinMessage,
+        getMessageEditHistory,
+        typingUserIds,
+        notifyTyping,
         loading,
         error,
       }}

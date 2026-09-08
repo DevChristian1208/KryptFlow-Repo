@@ -33,7 +33,7 @@ export default function UserSearch() {
   const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
 
   const { user: me } = useUser();
-  const { startDMWith, isBlocked, blockUser } = useDirect();
+  const { startDMWith, isBlocked, blockUser, friends } = useDirect();
   const { showToast } = useToast();
   const [sentRequests, setSentRequests] = useState<Set<string>>(new Set());
 
@@ -85,9 +85,28 @@ export default function UserSearch() {
           startAt(cleaned),
           endAt(cleaned + "")
         );
-        const snap = await get(q);
+        // Deckt nur Treffer ab, bei denen der (kleingeschriebene)
+        // Benutzername eingegeben wird. Viele Nutzer tippen hier
+        // naheliegenderweise stattdessen den Anzeigenamen ein (z. B. "Lena"
+        // statt "lena_hoffmann") — deshalb zusätzlich den gesamten
+        // newusers-Baum laden und clientseitig case-insensitiv auch gegen
+        // "newname" prüfen. Für die realistische Nutzerzahl dieser App
+        // unproblematisch.
+        const [snap, allSnap] = await Promise.all([get(q), get(ref(db, "newusers"))]);
         const val = (snap.val() as Record<string, NewUserDb> | null) || {};
-        const list: SearchResult[] = Object.values(val)
+
+        const merged = new Map<string, NewUserDb>();
+        for (const u of Object.values(val)) {
+          if (u.authUid) merged.set(u.authUid, u);
+        }
+        const allVal = (allSnap.val() as Record<string, NewUserDb> | null) || {};
+        for (const u of Object.values(allVal)) {
+          if (u.authUid && u.newname?.toLowerCase().includes(cleaned)) {
+            merged.set(u.authUid, u);
+          }
+        }
+
+        const list: SearchResult[] = Array.from(merged.values())
           .filter(
             (u) =>
               u.authUid &&
@@ -119,7 +138,7 @@ export default function UserSearch() {
   };
 
   const handleAddFriend = async (r: SearchResult) => {
-    if (!me?.id) return;
+    if (!me?.id || friends.some((f) => f.id === r.id)) return;
     try {
       await set(ref(db, `friendRequests/${r.id}/${me.id}`), {
         fromName: me.name || "Unbekannt",
@@ -197,7 +216,7 @@ export default function UserSearch() {
                     alt={r.name}
                     width={26}
                     height={26}
-                    className="rounded-full shrink-0"
+                    className="w-[26px] h-[26px] rounded-full object-cover shrink-0"
                   />
                   <div className="min-w-0">
                     <div className="truncate text-sm text-[var(--foreground)]">{r.name}</div>
@@ -206,16 +225,18 @@ export default function UserSearch() {
                     </div>
                   </div>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleAddFriend(r)}
-                  disabled={sentRequests.has(r.id)}
-                  className="btn-icon w-6 h-6 shrink-0 text-[var(--foreground-secondary)] disabled:opacity-40"
-                  aria-label="Freund hinzufügen"
-                  title="Freund hinzufügen"
-                >
-                  <UserPlus size={13} />
-                </button>
+                {!friends.some((f) => f.id === r.id) && (
+                  <button
+                    type="button"
+                    onClick={() => handleAddFriend(r)}
+                    disabled={sentRequests.has(r.id)}
+                    className="btn-icon w-6 h-6 shrink-0 text-[var(--foreground-secondary)] disabled:opacity-40"
+                    aria-label="Freund hinzufügen"
+                    title="Freund hinzufügen"
+                  >
+                    <UserPlus size={13} />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleBlock(r)}

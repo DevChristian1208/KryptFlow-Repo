@@ -21,6 +21,7 @@ import {
 import { auth, db } from "@/app/lib/firebase";
 import { ref, get, query, orderByChild, equalTo } from "firebase/database";
 import { logSecurityEvent } from "@/app/lib/securityLog";
+import { setPendingLoginPassword } from "@/app/lib/pendingLoginPassword";
 import { FirebaseError } from "firebase/app";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 
@@ -174,12 +175,20 @@ export default function Login() {
         resolvedEmail,
         password,
       );
+      // Nur für die automatische Schlüssel-Wiederherstellung/-Sicherung
+      // (siehe ensureIdentityAndAutoBackup in crypto.ts) — rein im
+      // Arbeitsspeicher dieses Tabs, nie persistiert, wird direkt beim
+      // ersten Auslesen in UserContext.tsx wieder verworfen.
+      setPendingLoginPassword(password);
       await completeLogin(cred);
     } catch (err) {
       if (
         err instanceof FirebaseError &&
         err.code === "auth/multi-factor-auth-required"
       ) {
+        // Das Passwort (erster Faktor) wurde bereits erfolgreich geprüft —
+        // sonst käme diese Fehlermeldung gar nicht erst zustande.
+        setPendingLoginPassword(password);
         setMfaResolver(getMultiFactorResolver(auth, err as MultiFactorError));
         setLoading(false);
         return;

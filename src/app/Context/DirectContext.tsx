@@ -328,7 +328,15 @@ async function resolveDmKeyForMessage(
   category: MsgCategory
 ): Promise<CryptoKey | null> {
   if (m.periodId && m.seq !== undefined && m.senderUid) {
-    const root = await getPeriodRoot(myUid, otherUid, m.periodId);
+    let root = await getPeriodRoot(myUid, otherUid, m.periodId);
+    // Fehlt nur der Ephemer-Schlüssel der Gegenseite (sie hat ihn evtl.
+    // gerade erst veröffentlicht), lohnt sich ein kurzes erneutes Nachsehen
+    // statt sofort dauerhaft "Warte auf Schlüssel" zu zeigen — analog zum
+    // Retry beim Channel-Epochen-Envelope.
+    for (let attempt = 0; !root && attempt < 4; attempt++) {
+      await new Promise((res) => setTimeout(res, 1000));
+      root = await getPeriodRoot(myUid, otherUid, m.periodId);
+    }
     if (!root) return null;
     return getReceiveMessageKey(
       convIdFromIds(myUid, otherUid),

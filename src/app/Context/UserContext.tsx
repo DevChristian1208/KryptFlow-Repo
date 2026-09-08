@@ -4,14 +4,21 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   ReactNode,
 } from "react";
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
 import { ref, get } from "firebase/database";
 import { auth, db } from "@/app/lib/firebase";
-import { ensureIdentityKeys } from "@/app/lib/crypto";
+import {
+  ensureIdentityKeys,
+  ensureIdentityAndAutoBackup,
+  needsIdentityRecoveryPrompt,
+} from "@/app/lib/crypto";
+import { consumePendingLoginPassword } from "@/app/lib/pendingLoginPassword";
 import { ensureHomeServerBootstrapped } from "@/app/lib/homeServer";
+import IdentityRecoveryModal from "@/app/Dashboard/Components/IdentityRecoveryModal";
 
 export type User = {
   id: string;
@@ -33,6 +40,8 @@ const UserContext = createContext<UserContextType | undefined>(undefined);
 export function UserProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [recoveryUid, setRecoveryUid] = useState<string | null>(null);
+  const recoveryResolveRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(
@@ -45,7 +54,27 @@ export function UserProvider({ children }: { children: ReactNode }) {
         }
 
         try {
-          await ensureIdentityKeys(authUser.uid);
+          // Direkt nach einem echten Login/einer Registrierung liegt kurz
+          // das Klartext-Passwort vor (siehe pendingLoginPassword.ts) —
+          // dann läuft die vollautomatische Variante: fehlende lokale
+          // Identität wird aus dem passwortverschlüsselten Backup
+          // wiederhergestellt (statt stillschweigend eine neue zu
+          // erzeugen), und das Backup wird direkt im Anschluss aktuell
+          // gehalten. Ein reiner Sitzungs-Reload hat kein Passwort zur
+          // Verfügung — dafür der interaktive Dialog als Fallback, falls
+          // genau dann lokale Schlüssel fehlen sollten.
+          const pendingPassword = consumePendingLoginPassword();
+          if (pendingPassword) {
+            await ensureIdentityAndAutoBackup(authUser.uid, pendingPassword);
+          } else {
+            if (await needsIdentityRecoveryPrompt(authUser.uid)) {
+              await new Promise<void>((resolve) => {
+                setRecoveryUid(authUser.uid);
+                recoveryResolveRef.current = resolve;
+              });
+            }
+            await ensureIdentityKeys(authUser.uid);
+          }
           // Best-effort, kein await nötig (blockiert das Laden des Nutzers
           // nicht) — legt den HomeServer beim Login des designierten
           // Owner-Accounts einmalig an, falls er noch nicht existiert.
@@ -97,9 +126,18 @@ export function UserProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, []);
 
+  function handleRecoveryResolved() {
+    setRecoveryUid(null);
+    recoveryResolveRef.current?.();
+    recoveryResolveRef.current = null;
+  }
+
   return (
     <UserContext.Provider value={{ user, setUser, loading }}>
       {children}
+      {recoveryUid && (
+        <IdentityRecoveryModal uid={recoveryUid} onResolved={handleRecoveryResolved} />
+      )}
     </UserContext.Provider>
   );
 }

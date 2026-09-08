@@ -3,19 +3,39 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
-import { ref, get, set, update } from "firebase/database";
+import { ref, get, set, update, push } from "firebase/database";
 import { db } from "@/app/lib/firebase";
 import { useUser } from "@/app/Context/UserContext";
 import { useDirect } from "@/app/Context/DirectContext";
 import { useServer } from "@/app/Context/ServerContext";
 import { useToast } from "@/app/Context/ToastContext";
-import { X, MessageCircle, UserPlus, Ban, Check, Server as ServerIcon } from "lucide-react";
+import {
+  X,
+  MessageCircle,
+  UserPlus,
+  UserMinus,
+  Ban,
+  Check,
+  Server as ServerIcon,
+  Flag,
+} from "lucide-react";
+import AvatarLightbox from "./AvatarLightbox";
+import ConfirmDialog from "./ConfirmDialog";
+import { SOCIAL_PLATFORMS } from "./SettingsModal";
+
+const REPORT_REASONS = [
+  "Spam oder Werbung",
+  "Belästigung oder Mobbing",
+  "Unangemessene Inhalte",
+  "Sonstiges",
+] as const;
 
 type NewUserDb = {
   newname?: string;
   newemail?: string;
   avatar?: string;
   status?: string;
+  socialLinks?: Record<string, { platform?: string; label: string; url: string }>;
 };
 
 type FriendEntry = { name?: string; avatar?: string; since?: number };
@@ -58,6 +78,14 @@ export default function UserProfileDialog({
   const [statusDraft, setStatusDraft] = useState("");
   const [savingStatus, setSavingStatus] = useState(false);
   const [showServerPicker, setShowServerPicker] = useState(false);
+  const [avatarLightboxOpen, setAvatarLightboxOpen] = useState(false);
+  const [removeFriendConfirmOpen, setRemoveFriendConfirmOpen] = useState(false);
+  const [removingFriend, setRemovingFriend] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState<string>(REPORT_REASONS[0]);
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [alreadyReported, setAlreadyReported] = useState(false);
 
   const isSelf = me?.id === userId;
   const blocked = !isSelf && isBlocked(userId);
@@ -87,10 +115,17 @@ export default function UserProfileDialog({
         setStatusDraft(p?.status || "");
 
         if (!isSelf && me?.id) {
-          const [mySnap, theirSnap, pendingSnap] = await Promise.all([
+          const [mySnap, theirSnap, pendingSnap, myReportsSnap] = await Promise.all([
             get(ref(db, `friends/${me.id}`)),
             get(ref(db, `friends/${userId}`)),
             get(ref(db, `friendRequests/${userId}/${me.id}`)),
+            // Eigener, isolierter Fehlerfang: das "Melden"-Feature ist rein
+            // optional (Grund: neue Rule evtl. noch nicht importiert) — ein
+            // Fehler hier darf niemals den gesamten Profil-Dialog blockieren.
+            get(ref(db, `userReports/${me.id}`)).catch((e) => {
+              console.warn("[UserProfileDialog] userReports nicht lesbar:", e);
+              return null;
+            }),
           ]);
           if (cancelled) return;
           const myFriends = (mySnap.val() as Record<string, FriendEntry> | null) || {};
@@ -99,6 +134,12 @@ export default function UserProfileDialog({
 
           setFriendSince(myFriends[userId]?.since ?? null);
           setPendingRequest(pendingSnap.exists());
+
+          const myReports =
+            (myReportsSnap?.val() as Record<string, { reportedUid?: string }> | null) || {};
+          setAlreadyReported(
+            Object.values(myReports).some((r) => r.reportedUid === userId)
+          );
 
           const mutual = Object.keys(myFriends)
             .filter((uid) => uid !== userId && uid !== me.id && theirFriends[uid])
@@ -133,6 +174,7 @@ export default function UserProfileDialog({
           setMutualFriends([]);
           setMutualServers([]);
           setPendingRequest(false);
+          setAlreadyReported(false);
         }
       } catch (e) {
         console.error("[UserProfileDialog] Laden fehlgeschlagen:", e);
@@ -146,7 +188,7 @@ export default function UserProfileDialog({
   }, [isOpen, userId, me?.id, isSelf, servers]);
 
   async function handleAddFriend() {
-    if (!me?.id) return;
+    if (!me?.id || friendSince) return;
     try {
       await set(ref(db, `friendRequests/${userId}/${me.id}`), {
         fromName: me.name || "Unbekannt",
@@ -157,6 +199,49 @@ export default function UserProfileDialog({
       showToast("Freundschaftsanfrage gesendet.", "success");
     } catch {
       showToast("Anfrage konnte nicht gesendet werden.", "error");
+    }
+  }
+
+  async function handleRemoveFriend() {
+    if (!me?.id) return;
+    setRemovingFriend(true);
+    try {
+      await update(ref(db), {
+        [`friends/${me.id}/${userId}`]: null,
+        [`friends/${userId}/${me.id}`]: null,
+      });
+      setFriendSince(null);
+      setMutualFriends([]);
+      setRemoveFriendConfirmOpen(false);
+      showToast("Freund entfernt.", "success");
+    } catch {
+      showToast("Freund konnte nicht entfernt werden.", "error");
+    } finally {
+      setRemovingFriend(false);
+    }
+  }
+
+  async function handleSubmitReport() {
+    if (!me?.id) return;
+    setReportSubmitting(true);
+    try {
+      const reportRef = push(ref(db, `userReports/${me.id}`));
+      await set(reportRef, {
+        reporterUid: me.id,
+        reportedUid: userId,
+        reportedName: profile?.newname || "Unbekannt",
+        reason: reportReason,
+        details: reportDetails.trim() || null,
+        createdAt: Date.now(),
+      });
+      setAlreadyReported(true);
+      setReportOpen(false);
+      setReportDetails("");
+      showToast("Danke, wir prüfen das.", "success");
+    } catch {
+      showToast("Meldung konnte nicht gesendet werden.", "error");
+    } finally {
+      setReportSubmitting(false);
     }
   }
 
@@ -209,14 +294,16 @@ export default function UserProfileDialog({
     (s) => s.myRole === "owner" || s.myRole === "admin"
   );
 
-  return createPortal(
-    <div
-      className="modal-overlay z-[70]"
-      onClick={(e) => e.currentTarget === e.target && onClose()}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Profil"
-    >
+  return (
+    <>
+      {createPortal(
+        <div
+          className="modal-overlay z-[70]"
+          onClick={(e) => e.currentTarget === e.target && onClose()}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Profil"
+        >
       <div className="modal-card w-full max-w-[420px] max-h-[85vh] overflow-y-auto p-6 sm:p-8">
         <button
           onClick={onClose}
@@ -233,12 +320,26 @@ export default function UserProfileDialog({
         ) : (
           <>
             <div className="flex flex-col items-center text-center mb-6">
-              <Image
+              <button
+                type="button"
+                onClick={() => setAvatarLightboxOpen(true)}
+                title="Profilbild vergrößern"
+                className="hover:opacity-80 transition"
+              >
+                <Image
+                  src={profile?.avatar || "/avatar1.png"}
+                  alt={profile?.newname || "Profil"}
+                  width={80}
+                  height={80}
+                  className="w-20 h-20 rounded-full object-cover mb-3"
+                />
+              </button>
+              <AvatarLightbox
+                open={avatarLightboxOpen}
+                onClose={() => setAvatarLightboxOpen(false)}
                 src={profile?.avatar || "/avatar1.png"}
                 alt={profile?.newname || "Profil"}
-                width={80}
-                height={80}
-                className="rounded-full mb-3"
+                size={160}
               />
               <h2 className="text-xl font-semibold text-[var(--foreground)]">
                 {profile?.newname || "Unbekannt"}
@@ -287,6 +388,27 @@ export default function UserProfileDialog({
               )
             )}
 
+            {profile?.socialLinks && Object.keys(profile.socialLinks).length > 0 && (
+              <div className="flex flex-wrap justify-center gap-2 mb-6">
+                {Object.values(profile.socialLinks).map((link) => {
+                  const platform = SOCIAL_PLATFORMS.find((p) => p.id === link.platform);
+                  const Icon = platform?.icon;
+                  return (
+                    <a
+                      key={link.url}
+                      href={link.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-[var(--surface-elevated)] border border-[var(--border-subtle)] text-[var(--accent)] hover:opacity-80 transition"
+                    >
+                      {Icon && <Icon size={12} />}
+                      {link.label}
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+
             {!isSelf && (
               <>
                 <div className="flex flex-wrap gap-2 mb-6">
@@ -302,6 +424,15 @@ export default function UserProfileDialog({
                     >
                       <UserPlus size={14} />
                       {pendingRequest ? "Anfrage gesendet" : "Freund hinzufügen"}
+                    </button>
+                  )}
+                  {friendSince && (
+                    <button
+                      onClick={() => setRemoveFriendConfirmOpen(true)}
+                      className="btn-secondary text-sm"
+                    >
+                      <UserMinus size={14} />
+                      Freund entfernen
                     </button>
                   )}
                   {invitableServers.length > 0 && (
@@ -338,6 +469,14 @@ export default function UserProfileDialog({
                     <Ban size={14} />
                     {blocked ? "Entblocken" : "Blockieren"}
                   </button>
+                  <button
+                    onClick={() => setReportOpen(true)}
+                    disabled={alreadyReported}
+                    className="btn-secondary text-sm text-[var(--danger)] border-[var(--danger)] disabled:opacity-50 disabled:text-[var(--foreground-secondary)] disabled:border-[var(--border-subtle)]"
+                  >
+                    <Flag size={14} />
+                    {alreadyReported ? "Gemeldet" : "Melden"}
+                  </button>
                 </div>
 
                 {mutualFriends.length > 0 && (
@@ -356,7 +495,7 @@ export default function UserProfileDialog({
                             alt={f.name}
                             width={24}
                             height={24}
-                            className="rounded-full"
+                            className="w-6 h-6 rounded-full object-cover"
                           />
                           <span className="text-sm text-[var(--foreground)]">{f.name}</span>
                         </div>
@@ -382,7 +521,7 @@ export default function UserProfileDialog({
                               alt={s.name}
                               width={24}
                               height={24}
-                              className="rounded-full object-cover"
+                              className="w-6 h-6 rounded-full object-cover"
                             />
                           ) : (
                             <div
@@ -403,7 +542,103 @@ export default function UserProfileDialog({
           </>
         )}
       </div>
-    </div>,
-    document.body
+        </div>,
+        document.body
+      )}
+
+      <ConfirmDialog
+        isOpen={removeFriendConfirmOpen}
+        title="Freund entfernen"
+        message={`Möchtest du ${profile?.newname || "diese Person"} wirklich aus deiner Freundesliste entfernen?`}
+        confirmLabel="Entfernen"
+        busy={removingFriend}
+        onConfirm={handleRemoveFriend}
+        onCancel={() => setRemoveFriendConfirmOpen(false)}
+      />
+
+      {reportOpen &&
+        mounted &&
+        createPortal(
+          <div
+            className="modal-overlay z-[80]"
+            onClick={(e) => e.currentTarget === e.target && setReportOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Nutzer melden"
+          >
+            <div className="modal-card w-full max-w-[420px] p-6 sm:p-7">
+              <button
+                onClick={() => setReportOpen(false)}
+                className="btn-icon absolute top-4 right-4 w-8 h-8 text-[var(--foreground-secondary)]"
+                aria-label="Dialog schließen"
+              >
+                <X size={16} />
+              </button>
+              <div className="flex items-center gap-2 mb-2">
+                <Flag size={20} className="text-[var(--danger)] shrink-0" />
+                <h2 className="text-lg font-semibold text-[var(--foreground)]">
+                  {profile?.newname || "Nutzer"} melden
+                </h2>
+              </div>
+              <p className="text-sm text-[var(--foreground-secondary)] mb-4">
+                Deine Meldung wird vertraulich geprüft. Ein Kontoausschluss erfolgt nicht automatisch.
+              </p>
+
+              <label className="block font-medium text-sm mb-1 text-[var(--foreground)]">
+                Grund
+              </label>
+              <div className="space-y-1 mb-4">
+                {REPORT_REASONS.map((r) => (
+                  <label
+                    key={r}
+                    className="flex items-center gap-2 text-sm text-[var(--foreground)] cursor-pointer"
+                  >
+                    <input
+                      type="radio"
+                      name="report-reason"
+                      checked={reportReason === r}
+                      onChange={() => setReportReason(r)}
+                    />
+                    {r}
+                  </label>
+                ))}
+              </div>
+
+              <label className="block font-medium text-sm mb-1 text-[var(--foreground)]">
+                Details (optional)
+              </label>
+              <div className="input-pill mb-6">
+                <textarea
+                  value={reportDetails}
+                  onChange={(e) => setReportDetails(e.target.value)}
+                  placeholder="Weitere Informationen…"
+                  maxLength={500}
+                  rows={3}
+                  className="w-full resize-none bg-transparent outline-none text-[var(--foreground)]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setReportOpen(false)}
+                  className="btn-secondary"
+                  disabled={reportSubmitting}
+                >
+                  Abbrechen
+                </button>
+                <button
+                  onClick={handleSubmitReport}
+                  disabled={reportSubmitting}
+                  className="btn-primary"
+                  style={{ background: "var(--danger)" }}
+                >
+                  {reportSubmitting ? "…" : "Melden"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }

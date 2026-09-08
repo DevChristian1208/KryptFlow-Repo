@@ -13,6 +13,7 @@ import { ref, runTransaction } from "firebase/database";
 import { FirebaseError } from "firebase/app";
 import { Eye, EyeOff, User, AtSign, Mail, Lock } from "lucide-react";
 import { useToast } from "@/app/Context/ToastContext";
+import { setPendingLoginPassword } from "@/app/lib/pendingLoginPassword";
 
 const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
 
@@ -44,6 +45,10 @@ export default function Register() {
 
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
+      // Nur für das automatische Schlüssel-Backup direkt bei der ersten
+      // Identitäts-Erzeugung (siehe ensureIdentityAndAutoBackup in
+      // crypto.ts) — rein im Arbeitsspeicher, nie persistiert.
+      setPendingLoginPassword(password);
       if (name.trim() !== "") {
         await updateProfile(cred.user, { displayName: name.trim() });
       }

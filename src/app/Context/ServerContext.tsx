@@ -16,6 +16,7 @@ import {
   get,
   update,
   runTransaction,
+  push,
 } from "firebase/database";
 import { db } from "@/app/lib/firebase";
 import { useUser } from "./UserContext";
@@ -27,6 +28,7 @@ export type ServerRole = "owner" | "admin" | "member";
 export type Server = {
   id: string;
   name: string;
+  description?: string;
   iconUrl?: string;
   bannerUrl?: string;
   ownerUid: string;
@@ -36,6 +38,7 @@ export type Server = {
 
 type ServerDb = {
   name?: string;
+  description?: string;
   iconUrl?: string;
   bannerUrl?: string;
   ownerUid?: string;
@@ -51,12 +54,29 @@ type ServerInviteDb = {
   useCount?: number;
 };
 
+export type ServerEmoji = { id: string; name: string; url: string };
+
+export type CustomRole = { id: string; name: string; color: string };
+
 type ServerContextType = {
   servers: Server[];
   activeServerId: string | null;
   activeServer: Server | null;
   setActiveServerId: (id: string | null) => void;
-  createServer: (name: string, iconUrl?: string) => Promise<string>;
+  customEmojis: ServerEmoji[];
+  addServerEmoji: (name: string, url: string, serverIdOverride?: string) => Promise<void>;
+  removeServerEmoji: (emojiId: string) => Promise<void>;
+  serverRoles: CustomRole[];
+  createServerRole: (name: string, color: string) => Promise<void>;
+  deleteServerRole: (roleId: string) => Promise<void>;
+  setMemberTagRoles: (uid: string, roleIds: string[]) => Promise<void>;
+  createServer: (
+    name: string,
+    iconUrl?: string,
+    bannerUrl?: string,
+    description?: string
+  ) => Promise<string>;
+  updateServerDescription: (serverId: string, description: string) => Promise<void>;
   createInvite: (
     serverId: string,
     opts?: { expiresInMs?: number; maxUses?: number }
@@ -77,6 +97,8 @@ type ServerContextType = {
     role: ServerRole
   ) => Promise<void>;
   removeMember: (serverId: string, uid: string) => Promise<void>;
+  banMember: (serverId: string, uid: string) => Promise<void>;
+  unbanMember: (serverId: string, uid: string) => Promise<void>;
   leaveServer: (serverId: string) => Promise<void>;
   loading: boolean;
 };
@@ -119,6 +141,7 @@ export function ServerProvider({ children }: { children: ReactNode }) {
             const server: Server = {
               id,
               name: s.name || "Unbenannter Server",
+              description: s.description,
               iconUrl: s.iconUrl,
               bannerUrl: s.bannerUrl,
               ownerUid: s.ownerUid || "",
@@ -144,8 +167,98 @@ export function ServerProvider({ children }: { children: ReactNode }) {
 
   const activeServer = servers.find((s) => s.id === activeServerId) || null;
 
+  const [customEmojis, setCustomEmojis] = useState<ServerEmoji[]>([]);
+
+  useEffect(() => {
+    setCustomEmojis([]);
+    if (!activeServerId) return;
+    const r = ref(db, `serverEmojis/${activeServerId}`);
+    const unsub = onValue(r, (snap) => {
+      const raw = (snap.val() as Record<string, { name: string; url: string }> | null) || {};
+      setCustomEmojis(
+        Object.entries(raw)
+          .map(([id, v]) => ({ id, name: v.name, url: v.url }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+    });
+    return () => off(r, "value", unsub);
+  }, [activeServerId]);
+
+  const [serverRoles, setServerRoles] = useState<CustomRole[]>([]);
+
+  useEffect(() => {
+    setServerRoles([]);
+    if (!activeServerId) return;
+    const r = ref(db, `serverRoles/${activeServerId}`);
+    const unsub = onValue(r, (snap) => {
+      const raw = (snap.val() as Record<string, { name: string; color: string }> | null) || {};
+      setServerRoles(
+        Object.entries(raw)
+          .map(([id, v]) => ({ id, name: v.name, color: v.color }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+    });
+    return () => off(r, "value", unsub);
+  }, [activeServerId]);
+
+  const createServerRole = useCallback(
+    async (name: string, color: string): Promise<void> => {
+      const clean = name.trim();
+      if (!activeServerId || !clean) throw new Error("Ungültiger Name.");
+      const roleRef = push(ref(db, `serverRoles/${activeServerId}`));
+      await set(roleRef, { name: clean, color, createdAt: Date.now() });
+    },
+    [activeServerId]
+  );
+
+  const deleteServerRole = useCallback(
+    async (roleId: string): Promise<void> => {
+      if (!activeServerId) return;
+      await set(ref(db, `serverRoles/${activeServerId}/${roleId}`), null);
+    },
+    [activeServerId]
+  );
+
+  const setMemberTagRoles = useCallback(
+    async (uid: string, roleIds: string[]): Promise<void> => {
+      if (!activeServerId) return;
+      const value = roleIds.length
+        ? Object.fromEntries(roleIds.map((id) => [id, true]))
+        : null;
+      await set(
+        ref(db, `serverMembers/${activeServerId}/${uid}/tagRoleIds`),
+        value
+      );
+    },
+    [activeServerId]
+  );
+
+  const addServerEmoji = useCallback(
+    async (name: string, url: string, serverIdOverride?: string): Promise<void> => {
+      const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
+      const targetServerId = serverIdOverride || activeServerId;
+      if (!targetServerId || !clean) throw new Error("Ungültiger Name.");
+      const emojiRef = push(ref(db, `serverEmojis/${targetServerId}`));
+      await set(emojiRef, { name: clean, url });
+    },
+    [activeServerId]
+  );
+
+  const removeServerEmoji = useCallback(
+    async (emojiId: string): Promise<void> => {
+      if (!activeServerId) return;
+      await set(ref(db, `serverEmojis/${activeServerId}/${emojiId}`), null);
+    },
+    [activeServerId]
+  );
+
   const createServer = useCallback(
-    async (name: string, iconUrl?: string): Promise<string> => {
+    async (
+      name: string,
+      iconUrl?: string,
+      bannerUrl?: string,
+      description?: string
+    ): Promise<string> => {
       if (!user?.id) throw new Error("Nicht eingeloggt.");
       const clean = name.trim();
       if (!clean) throw new Error("Ungültiger Server-Name.");
@@ -160,7 +273,9 @@ export function ServerProvider({ children }: { children: ReactNode }) {
         // Schreibvorgang erst angelegt werden (Cross-Path-Problem).
         await set(ref(db, `servers/${serverId}`), {
           name: clean,
+          ...(description?.trim() ? { description: description.trim() } : {}),
           ...(iconUrl ? { iconUrl } : {}),
+          ...(bannerUrl ? { bannerUrl } : {}),
           ownerUid: user.id,
           createdAt,
         });
@@ -323,6 +438,9 @@ export function ServerProvider({ children }: { children: ReactNode }) {
       const clean = name.trim();
       if (!clean) return;
       await update(ref(db, `servers/${serverId}`), { name: clean });
+      setServers((prev) =>
+        prev.map((s) => (s.id === serverId ? { ...s, name: clean } : s))
+      );
     },
     []
   );
@@ -330,6 +448,9 @@ export function ServerProvider({ children }: { children: ReactNode }) {
   const updateServerBanner = useCallback(
     async (serverId: string, bannerUrl: string): Promise<void> => {
       await update(ref(db, `servers/${serverId}`), { bannerUrl });
+      setServers((prev) =>
+        prev.map((s) => (s.id === serverId ? { ...s, bannerUrl } : s))
+      );
     },
     []
   );
@@ -337,6 +458,20 @@ export function ServerProvider({ children }: { children: ReactNode }) {
   const updateServerIcon = useCallback(
     async (serverId: string, iconUrl: string): Promise<void> => {
       await update(ref(db, `servers/${serverId}`), { iconUrl });
+      setServers((prev) =>
+        prev.map((s) => (s.id === serverId ? { ...s, iconUrl } : s))
+      );
+    },
+    []
+  );
+
+  const updateServerDescription = useCallback(
+    async (serverId: string, description: string): Promise<void> => {
+      const clean = description.trim();
+      await update(ref(db, `servers/${serverId}`), { description: clean });
+      setServers((prev) =>
+        prev.map((s) => (s.id === serverId ? { ...s, description: clean } : s))
+      );
     },
     []
   );
@@ -432,6 +567,25 @@ export function ServerProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  const banMember = useCallback(
+    async (serverId: string, uid: string): Promise<void> => {
+      if (!user?.id) throw new Error("Nicht eingeloggt.");
+      await update(ref(db), {
+        [`serverMembers/${serverId}/${uid}`]: null,
+        [`userServers/${uid}/${serverId}`]: null,
+        [`serverBans/${serverId}/${uid}`]: { bannedBy: user.id, bannedAt: Date.now() },
+      });
+    },
+    [user?.id]
+  );
+
+  const unbanMember = useCallback(
+    async (serverId: string, uid: string): Promise<void> => {
+      await set(ref(db, `serverBans/${serverId}/${uid}`), null);
+    },
+    []
+  );
+
   const leaveServer = useCallback(
     async (serverId: string): Promise<void> => {
       if (!user?.id) throw new Error("Nicht eingeloggt.");
@@ -454,16 +608,26 @@ export function ServerProvider({ children }: { children: ReactNode }) {
         activeServerId,
         activeServer,
         setActiveServerId,
+        customEmojis,
+        addServerEmoji,
+        removeServerEmoji,
+        serverRoles,
+        createServerRole,
+        deleteServerRole,
+        setMemberTagRoles,
         createServer,
         createInvite,
         joinServerByInviteCode,
         inviteUserToServer,
         renameServer,
         updateServerBanner,
+        updateServerDescription,
         updateServerIcon,
         deleteServer,
         updateMemberRole,
         removeMember,
+        banMember,
+        unbanMember,
         leaveServer,
         loading,
       }}

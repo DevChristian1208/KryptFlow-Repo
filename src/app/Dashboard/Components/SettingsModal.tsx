@@ -23,12 +23,37 @@ import {
   Shield,
   Settings as SettingsIcon,
   Monitor,
+  Plus,
+  Instagram,
+  Github,
+  Linkedin,
+  Youtube,
+  Twitter,
+  Twitch,
+  Globe,
+  Music2,
+  MessageCircle,
+  Link as LinkIconOther,
 } from "lucide-react";
+
+export const SOCIAL_PLATFORMS = [
+  { id: "instagram", label: "Instagram", icon: Instagram },
+  { id: "twitter", label: "X (Twitter)", icon: Twitter },
+  { id: "tiktok", label: "TikTok", icon: Music2 },
+  { id: "youtube", label: "YouTube", icon: Youtube },
+  { id: "github", label: "GitHub", icon: Github },
+  { id: "linkedin", label: "LinkedIn", icon: Linkedin },
+  { id: "discord", label: "Discord", icon: MessageCircle },
+  { id: "twitch", label: "Twitch", icon: Twitch },
+  { id: "website", label: "Website", icon: Globe },
+  { id: "other", label: "Sonstiges", icon: LinkIconOther },
+] as const;
 import { useToast } from "@/app/Context/ToastContext";
 import { useUser } from "@/app/Context/UserContext";
 import { useSession } from "@/app/Context/SessionContext";
 import { uploadImage, ImageValidationError } from "@/app/lib/uploadImage";
-import { exportIdentityBackup, restoreIdentityBackup } from "@/app/lib/crypto";
+import { exportIdentityBackup } from "@/app/lib/crypto";
+import { APP_VERSION } from "@/app/lib/version";
 import {
   logSecurityEvent,
   getRecentSecurityEvents,
@@ -36,6 +61,8 @@ import {
   type SecurityEvent,
 } from "@/app/lib/securityLog";
 import DeleteAccountModal from "./DeleteAccountModal";
+import AvatarLightbox from "./AvatarLightbox";
+import AvatarCropModal from "./AvatarCropModal";
 
 const PRESET_AVATARS = [
   "/avatar1.png",
@@ -81,9 +108,14 @@ export default function SettingsModal({
 
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState("");
+  const [socialLinks, setSocialLinks] = useState<
+    { id: string; platform: string; label: string; url: string }[]
+  >([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [avatarLightboxOpen, setAvatarLightboxOpen] = useState(false);
+  const [cropFile, setCropFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => setMounted(true), []);
@@ -96,6 +128,25 @@ export default function SettingsModal({
   }, [isOpen, user]);
 
   useEffect(() => {
+    if (!isOpen || !user?.id) return;
+    get(ref(db, `newusers/${user.id}/socialLinks`)).then((snap) => {
+      const raw =
+        (snap.val() as Record<
+          string,
+          { platform?: string; label: string; url: string }
+        > | null) || {};
+      setSocialLinks(
+        Object.entries(raw).map(([id, v]) => ({
+          id,
+          platform: v.platform || "other",
+          label: v.label,
+          url: v.url,
+        }))
+      );
+    });
+  }, [isOpen, user?.id]);
+
+  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -103,15 +154,20 @@ export default function SettingsModal({
     return () => window.removeEventListener("keydown", handler);
   }, [isOpen, onClose]);
 
-  const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = async (
-    e
-  ) => {
+  const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const file = e.target.files?.[0];
-    if (!file || !user?.id) return;
+    if (!file) return;
+    setCropFile(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
+  async function handleCropped(blob: Blob) {
+    setCropFile(null);
+    if (!user?.id) return;
     setUploading(true);
     try {
-      const url = await uploadImage(file, `avatars/${user.id}_${Date.now()}`);
+      const croppedFile = new File([blob], "avatar.jpg", { type: "image/jpeg" });
+      const url = await uploadImage(croppedFile, `avatars/${user.id}_${Date.now()}`);
       setAvatar(url);
     } catch (err) {
       console.error("[SettingsModal] Avatar-Upload fehlgeschlagen:", err);
@@ -123,9 +179,8 @@ export default function SettingsModal({
       );
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  };
+  }
 
   async function handleSave() {
     if (!user?.id || saving) return;
@@ -136,9 +191,19 @@ export default function SettingsModal({
     }
     setSaving(true);
     try {
+      const cleanLinks = socialLinks.filter((l) => l.label.trim() && l.url.trim());
+      const socialLinksValue = cleanLinks.length
+        ? Object.fromEntries(
+            cleanLinks.map((l) => [
+              l.id,
+              { platform: l.platform, label: l.label.trim(), url: l.url.trim() },
+            ])
+          )
+        : null;
       await update(ref(db, `newusers/${user.id}`), {
         newname: cleanName,
         avatar,
+        socialLinks: socialLinksValue,
       });
       setUser({ ...user, name: cleanName, avatar });
       showToast("Profil aktualisiert.", "success");
@@ -207,14 +272,31 @@ export default function SettingsModal({
                 </h3>
 
                 <div className="flex items-center gap-4 mb-4">
-                  <div className="w-20 h-20 rounded-full overflow-hidden border border-[var(--border-subtle)] bg-[var(--surface-elevated)] shrink-0 relative">
+                  <button
+                    type="button"
+                    onClick={() => setAvatarLightboxOpen(true)}
+                    title="Profilbild vergrößern"
+                    className="w-20 h-20 rounded-full overflow-hidden border border-[var(--border-subtle)] bg-[var(--surface-elevated)] shrink-0 relative hover:opacity-80 transition"
+                  >
                     <Image
                       src={avatar || "/avatar1.png"}
                       alt="Profilbild"
                       fill
                       className="object-cover"
                     />
-                  </div>
+                  </button>
+                  <AvatarLightbox
+                    open={avatarLightboxOpen}
+                    onClose={() => setAvatarLightboxOpen(false)}
+                    src={avatar || "/avatar1.png"}
+                    alt="Profilbild"
+                    size={260}
+                  />
+                  <AvatarCropModal
+                    file={cropFile}
+                    onCancel={() => setCropFile(null)}
+                    onCropped={handleCropped}
+                  />
                   <div>
                     <button
                       type="button"
@@ -246,7 +328,7 @@ export default function SettingsModal({
                         avatar === src ? "border-[var(--accent)]" : "border-transparent"
                       }`}
                     >
-                      <Image src={src} alt="" width={40} height={40} className="rounded-full" />
+                      <Image src={src} alt="" width={40} height={40} className="w-10 h-10 rounded-full object-cover" />
                     </button>
                   ))}
                 </div>
@@ -262,6 +344,118 @@ export default function SettingsModal({
                     placeholder="Dein Name"
                   />
                 </div>
+
+                <label className="block font-medium text-sm mb-1 mt-4 text-[var(--foreground)]">
+                  Social Links
+                </label>
+                <div className="space-y-2 mb-2">
+                  {socialLinks.map((link) => {
+                    const platform =
+                      SOCIAL_PLATFORMS.find((p) => p.id === link.platform) ||
+                      SOCIAL_PLATFORMS[SOCIAL_PLATFORMS.length - 1];
+                    const Icon = platform.icon;
+                    return (
+                      <div key={link.id} className="flex items-center gap-2">
+                        <div className="input-pill w-[9.5rem] shrink-0">
+                          <Icon size={14} className="text-[var(--foreground-secondary)] shrink-0" />
+                          <select
+                            value={platform.id}
+                            onChange={(e) => {
+                              const next = SOCIAL_PLATFORMS.find(
+                                (p) => p.id === e.target.value
+                              );
+                              if (!next) return;
+                              setSocialLinks((prev) =>
+                                prev.map((l) =>
+                                  l.id === link.id
+                                    ? {
+                                        ...l,
+                                        platform: next.id,
+                                        label:
+                                          next.id === "other" && l.platform !== "other"
+                                            ? ""
+                                            : next.id === "other"
+                                            ? l.label
+                                            : next.label,
+                                      }
+                                    : l
+                                )
+                              );
+                            }}
+                            className="w-full bg-transparent outline-none text-[var(--foreground)]"
+                          >
+                            {SOCIAL_PLATFORMS.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {platform.id === "other" && (
+                          <div className="input-pill w-28 shrink-0">
+                            <input
+                              value={link.label}
+                              onChange={(e) =>
+                                setSocialLinks((prev) =>
+                                  prev.map((l) =>
+                                    l.id === link.id ? { ...l, label: e.target.value } : l
+                                  )
+                                )
+                              }
+                              type="text"
+                              placeholder="Bezeichnung"
+                              maxLength={24}
+                            />
+                          </div>
+                        )}
+                        <div className="input-pill flex-1">
+                          <input
+                            value={link.url}
+                            onChange={(e) =>
+                              setSocialLinks((prev) =>
+                                prev.map((l) =>
+                                  l.id === link.id ? { ...l, url: e.target.value } : l
+                                )
+                              )
+                            }
+                            type="url"
+                            placeholder="https://…"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSocialLinks((prev) => prev.filter((l) => l.id !== link.id))
+                          }
+                          className="btn-icon w-7 h-7 shrink-0 text-[var(--foreground-secondary)]"
+                          aria-label="Link entfernen"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {socialLinks.length < 8 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSocialLinks((prev) => [
+                        ...prev,
+                        {
+                          id: crypto.randomUUID(),
+                          platform: "instagram",
+                          label: "Instagram",
+                          url: "",
+                        },
+                      ])
+                    }
+                    className="btn-secondary text-xs px-2.5 py-1.5"
+                  >
+                    <Plus size={13} />
+                    Link hinzufügen
+                  </button>
+                )}
               </div>
 
               <div className="flex justify-end gap-3">
@@ -303,6 +497,10 @@ export default function SettingsModal({
             </div>
           )}
         </div>
+
+        <p className="text-center text-xs text-[var(--foreground-secondary)] mt-8">
+          Cryptflow v{APP_VERSION}
+        </p>
       </div>
 
       <DeleteAccountModal isOpen={deleteOpen} onClose={() => setDeleteOpen(false)} />
@@ -355,7 +553,16 @@ function SecurityTab() {
         EmailAuthProvider.credential(current.email, currentPassword)
       );
       await updatePassword(current, newPassword);
-      if (user?.id) logSecurityEvent(user.id, "password_changed");
+      if (user?.id) {
+        logSecurityEvent(user.id, "password_changed");
+        // Das automatische Schlüssel-Backup ist mit dem ALTEN Passwort
+        // verschlüsselt (siehe ensureIdentityAndAutoBackup) — ohne dieses
+        // Nachziehen könnte es nach einer Passwort-Änderung nicht mehr
+        // entschlüsselt werden.
+        exportIdentityBackup(user.id, newPassword).catch((e) =>
+          console.error("[SettingsModal] Backup-Aktualisierung nach Passwortwechsel fehlgeschlagen:", e)
+        );
+      }
       showToast("Passwort geändert.", "success");
       setCurrentPassword("");
       setNewPassword("");
@@ -687,54 +894,41 @@ function SecurityLogSection() {
 function KeyBackupSection() {
   const { user } = useUser();
   const { showToast } = useToast();
-  const [mode, setMode] = useState<"idle" | "create" | "restore">("idle");
-  const [passphrase, setPassphrase] = useState("");
-  const [confirmPassphrase, setConfirmPassphrase] = useState("");
+  const [backupInfo, setBackupInfo] = useState<{ createdAt: number } | null | undefined>(
+    undefined
+  );
+  const [showRefresh, setShowRefresh] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    get(ref(db, `encryptedKeyBackup/${user.id}`)).then((snap) => {
+      setBackupInfo(snap.exists() ? (snap.val() as { createdAt: number }) : null);
+    });
+  }, [user?.id]);
 
   if (!user?.id || user.isGuest) return null;
 
-  function reset() {
-    setMode("idle");
-    setPassphrase("");
-    setConfirmPassphrase("");
-  }
-
-  async function handleCreate() {
-    if (!user?.id || busy) return;
-    if (passphrase !== confirmPassphrase) {
-      showToast("Die Passphrasen stimmen nicht überein.", "error");
-      return;
-    }
+  async function handleRefresh() {
+    if (!user?.id || !auth.currentUser?.email || busy) return;
     setBusy(true);
     try {
-      await exportIdentityBackup(user.id, passphrase);
+      await reauthenticateWithCredential(
+        auth.currentUser,
+        EmailAuthProvider.credential(auth.currentUser.email, currentPassword)
+      );
+      await exportIdentityBackup(user.id, currentPassword);
       logSecurityEvent(user.id, "key_backup_created");
-      showToast(
-        "Backup erstellt. Merke dir die Passphrase gut — ohne sie ist das Backup nutzlos, Cryptflow kennt sie nicht.",
-        "success"
-      );
-      reset();
+      setBackupInfo({ createdAt: Date.now() });
+      setShowRefresh(false);
+      setCurrentPassword("");
+      showToast("Backup aktualisiert.", "success");
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Backup fehlgeschlagen.", "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRestore() {
-    if (!user?.id || busy) return;
-    setBusy(true);
-    try {
-      await restoreIdentityBackup(user.id, passphrase);
-      logSecurityEvent(user.id, "key_backup_restored");
       showToast(
-        "Schlüssel wiederhergestellt. Bitte lade die Seite neu, damit alles greift.",
-        "success"
+        e instanceof Error ? "Passwort falsch oder Aktualisierung fehlgeschlagen." : "Fehlgeschlagen.",
+        "error"
       );
-      reset();
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Wiederherstellen fehlgeschlagen.", "error");
     } finally {
       setBusy(false);
     }
@@ -746,82 +940,54 @@ function KeyBackupSection() {
         Schlüssel-Backup
       </h3>
       <p className="text-xs text-[var(--foreground-secondary)] mb-3">
-        Optional: verschlüssele deine privaten Schlüssel mit einer Passphrase
-        und lege sie ab, um sie auf einem neuen Gerät wiederherzustellen —
-        sonst gilt weiterhin: neues Gerät = neue Identität, alte Nachrichten
-        nicht mehr lesbar. Die Passphrase verlässt nie diesen Browser.
+        Deine privaten Schlüssel werden bei jedem Login automatisch gesichert
+        (verschlüsselt mit deinem Account-Passwort) — falls dein Browser
+        lokale Daten löscht (z. B. nach längerer Inaktivität), stellt die App
+        deine Identität beim nächsten Login automatisch wieder her. Kein
+        manueller Schritt nötig.
       </p>
 
-      {mode === "idle" && (
-        <div className="flex gap-2">
-          <button onClick={() => setMode("create")} className="btn-secondary text-sm">
-            Backup erstellen
-          </button>
-          <button onClick={() => setMode("restore")} className="btn-secondary text-sm">
-            Aus Backup wiederherstellen
-          </button>
-        </div>
+      {backupInfo === undefined ? null : backupInfo ? (
+        <p className="text-xs text-[var(--foreground-secondary)] mb-3">
+          Zuletzt gesichert: {new Date(backupInfo.createdAt).toLocaleString("de-DE")}
+        </p>
+      ) : (
+        <p className="text-xs text-[var(--foreground-secondary)] mb-3">
+          Noch kein Backup vorhanden — wird beim nächsten Login automatisch angelegt.
+        </p>
       )}
 
-      {mode === "create" && (
+      {!showRefresh ? (
+        <button onClick={() => setShowRefresh(true)} className="btn-secondary text-sm">
+          Backup jetzt manuell aktualisieren
+        </button>
+      ) : (
         <div className="space-y-2 max-w-xs">
           <div className="input-pill">
             <input
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
               type="password"
-              placeholder="Passphrase (mind. 8 Zeichen)"
-              autoComplete="new-password"
-            />
-          </div>
-          <div className="input-pill">
-            <input
-              value={confirmPassphrase}
-              onChange={(e) => setConfirmPassphrase(e.target.value)}
-              type="password"
-              placeholder="Passphrase bestätigen"
-              autoComplete="new-password"
-            />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={reset} className="btn-secondary text-sm">
-              Abbrechen
-            </button>
-            <button
-              onClick={handleCreate}
-              disabled={busy || passphrase.length < 8}
-              className="btn-primary text-sm"
-            >
-              {busy ? "Erstellt…" : "Backup erstellen"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {mode === "restore" && (
-        <div className="space-y-2 max-w-xs">
-          <p className="text-xs text-[var(--danger)]">
-            Ersetzt die Schlüssel auf diesem Gerät durch die aus dem Backup.
-          </p>
-          <div className="input-pill">
-            <input
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              type="password"
-              placeholder="Passphrase"
+              placeholder="Aktuelles Passwort"
               autoComplete="current-password"
             />
           </div>
           <div className="flex gap-2">
-            <button onClick={reset} className="btn-secondary text-sm">
+            <button
+              onClick={() => {
+                setShowRefresh(false);
+                setCurrentPassword("");
+              }}
+              className="btn-secondary text-sm"
+            >
               Abbrechen
             </button>
             <button
-              onClick={handleRestore}
-              disabled={busy || !passphrase}
+              onClick={handleRefresh}
+              disabled={busy || !currentPassword}
               className="btn-primary text-sm"
             >
-              {busy ? "Stellt wieder her…" : "Wiederherstellen"}
+              {busy ? "Aktualisiert…" : "Aktualisieren"}
             </button>
           </div>
         </div>
@@ -951,7 +1117,21 @@ function UsernameSection() {
  * KONTO: Sitzungen/Geräte
  * ---------------------------------------------------------*/
 function SessionsSection() {
-  const { sessions, currentSessionId, endSession } = useSession();
+  const { sessions, currentSessionId, endSession, staySignedIn, setStaySignedIn } =
+    useSession();
+  const { showToast } = useToast();
+  const [savingStaySignedIn, setSavingStaySignedIn] = useState(false);
+
+  async function handleToggleStaySignedIn() {
+    setSavingStaySignedIn(true);
+    try {
+      await setStaySignedIn(!staySignedIn);
+    } catch {
+      showToast("Einstellung konnte nicht gespeichert werden.", "error");
+    } finally {
+      setSavingStaySignedIn(false);
+    }
+  }
 
   function describe(userAgent?: string): string {
     if (!userAgent) return "Unbekanntes Gerät";
@@ -968,6 +1148,26 @@ function SessionsSection() {
       <h3 className="text-sm font-semibold text-[var(--foreground-secondary)] uppercase tracking-wide mb-3">
         Sitzungen / Geräte
       </h3>
+
+      <label className="flex items-start gap-3 px-3 py-2.5 mb-4 rounded-lg bg-[var(--surface-elevated)] border border-[var(--border-subtle)] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={staySignedIn}
+          onChange={handleToggleStaySignedIn}
+          disabled={savingStaySignedIn}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="block text-sm text-[var(--foreground)]">
+            Dauerhaft angemeldet bleiben
+          </span>
+          <span className="block text-xs text-[var(--foreground-secondary)] mt-0.5">
+            Standardmäßig wirst du nach 30 Minuten Inaktivität automatisch abgemeldet.
+            Mit dieser Option bleibt diese Abmeldung deaktiviert.
+          </span>
+        </span>
+      </label>
+
       <div className="space-y-2">
         {sessions.map((s) => (
           <div

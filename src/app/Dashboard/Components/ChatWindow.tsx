@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useChannel } from "@/app/Context/ChannelContext";
+import { useServer } from "@/app/Context/ServerContext";
 import { useDirect } from "@/app/Context/DirectContext";
 import { useUser } from "@/app/Context/UserContext";
 import { useToast } from "@/app/Context/ToastContext";
@@ -12,7 +13,7 @@ import { useProfileDialog } from "@/app/Context/ProfileDialogContext";
 import MembersModal from "./MembersModal";
 import MessageList from "./MessageList";
 import MessageComposer from "./MessageComposer";
-import { Lock, Hash, Users } from "lucide-react";
+import { Lock, Hash, Users, Search, X } from "lucide-react";
 
 function EncryptionBadge({ detail }: { detail: string }) {
   return (
@@ -46,9 +47,19 @@ export default function ChatWindow() {
     sendThreadReply,
     deleteThreadReply,
     reactionsByMessage: channelReactions,
+    pollVotesByMessage,
+    votePoll,
     threadCountByMessage: channelThreadCounts,
     threadMessagesByParent: channelThreadMessages,
+    pinnedMessageIds,
+    pinMessage,
+    unpinMessage,
+    getMessageEditHistory,
+    typingUserIds,
+    notifyTyping,
   } = useChannel();
+
+  const { activeServer, customEmojis } = useServer();
 
   const {
     activeDMUser,
@@ -75,6 +86,8 @@ export default function ChatWindow() {
   const { unreadMentionsByChannel, markChannelMentionsRead } = useNotifications();
 
   const [membersOpen, setMembersOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pendingForceScrollRef = useRef(false);
 
@@ -109,6 +122,8 @@ export default function ChatWindow() {
     // nächsten tatsächlichen Anwachsen der Liste erzwingen.
     pendingForceScrollRef.current = true;
     scrollToBottom(true);
+    setSearchOpen(false);
+    setSearchQuery("");
   }, [activeDMUserId, activeChannel?.id]);
 
   useEffect(() => {
@@ -116,6 +131,21 @@ export default function ChatWindow() {
     pendingForceScrollRef.current = false;
     scrollToBottom(force);
   }, [dmMessages.length, channelMessages.length]);
+
+  // Nachrichten-Suche: rein clientseitig über die bereits entschlüsselten
+  // Nachrichten der aktuell aktiven Konversation — bei E2EE kann der Server
+  // ohnehin nicht durchsuchen, eine serverseitige Suche über den Klartext
+  // ist architektonisch ausgeschlossen.
+  const q = searchQuery.trim().toLowerCase();
+  const filteredDmMessages = useMemo(
+    () => (q ? dmMessages.filter((m) => m.text.toLowerCase().includes(q)) : dmMessages),
+    [dmMessages, q]
+  );
+  const filteredChannelMessages = useMemo(
+    () =>
+      q ? channelMessages.filter((m) => m.text.toLowerCase().includes(q)) : channelMessages,
+    [channelMessages, q]
+  );
 
   /* -------------------------------------------------------
    * DIRECT MESSAGES VIEW
@@ -135,7 +165,7 @@ export default function ChatWindow() {
                 alt={activeDMUser.name}
                 width={32}
                 height={32}
-                className="rounded-full"
+                className="w-8 h-8 rounded-full object-cover"
               />
               <PresenceDot online={!!onlineUids[activeDMUserId]} />
             </div>
@@ -150,7 +180,46 @@ export default function ChatWindow() {
               )}
             </div>
           </button>
+          <button
+            type="button"
+            onClick={() => setSearchOpen((v) => !v)}
+            className="btn-icon w-8 h-8 shrink-0 text-[var(--foreground-secondary)]"
+            aria-label="Nachrichten durchsuchen"
+            title="Nachrichten durchsuchen"
+          >
+            <Search size={16} />
+          </button>
         </div>
+
+        {searchOpen && (
+          <div className="px-3 sm:px-6 py-2 border-b border-[var(--border-subtle)]">
+            <div className="input-pill">
+              <Search size={14} className="text-[var(--foreground-secondary)]" />
+              <input
+                autoFocus
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                type="text"
+                placeholder="In diesem Chat suchen…"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="btn-icon w-6 h-6 shrink-0 text-[var(--foreground-secondary)]"
+                  aria-label="Suche leeren"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            {q && (
+              <p className="text-[11px] text-[var(--foreground-secondary)] mt-1">
+                {filteredDmMessages.length} Treffer
+              </p>
+            )}
+          </div>
+        )}
 
         <div
           ref={scrollRef}
@@ -164,7 +233,7 @@ export default function ChatWindow() {
                   alt={activeDMUser.name}
                   width={64}
                   height={64}
-                  className="rounded-full mb-3 hover:opacity-80 transition"
+                  className="w-16 h-16 rounded-full object-cover mb-3 hover:opacity-80 transition"
                 />
               </button>
               <h2 className="text-xl sm:text-2xl font-bold text-[var(--foreground)]">
@@ -173,12 +242,13 @@ export default function ChatWindow() {
               <p className="text-sm text-[var(--foreground-secondary)] mt-1 max-w-md">
                 Das ist der Anfang deiner Unterhaltung mit {activeDMUser.name}.
               </p>
-              <EncryptionBadge detail="Ende-zu-Ende-verschlüsselt · AES-256-GCM · Perfect Forward Secrecy (Pro-Nachricht-Ratchet)" />
+              <EncryptionBadge detail="Ende-zu-Ende-verschlüsselt · AES-256-GCM" />
             </div>
 
             <MessageList
               key={`dm-${activeDMUserId}`}
-              messages={dmMessages}
+              saveContext={{ kind: "dm", otherUid: activeDMUserId }}
+              messages={filteredDmMessages}
               reactionsByMessage={dmReactions}
               threadCountByMessage={dmThreadCounts}
               threadMessagesByParent={dmThreadMessages}
@@ -232,31 +302,84 @@ export default function ChatWindow() {
               ) : null}
             </div>
 
-            <button
-              onClick={() => setMembersOpen(true)}
-              className="flex items-center gap-2 bg-[var(--border-subtle)] hover:bg-[color-mix(in_srgb,var(--foreground)_12%,transparent)] transition px-2.5 sm:px-3 py-2 rounded-full shrink-0"
-              aria-label="Mitglieder anzeigen"
-            >
-              <Users size={16} className="sm:hidden text-[var(--foreground-secondary)]" />
-              <div className="hidden sm:flex -space-x-2">
-                {topAvatars.map((m) => (
-                  <div key={m.id} className="relative">
-                    <Image
-                      src={m.avatar || "/avatar1.png"}
-                      alt={m.name}
-                      width={24}
-                      height={24}
-                      className="rounded-full border-2 border-[var(--surface-elevated)]"
-                    />
-                    <PresenceDot online={!!onlineUids[m.id]} />
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setSearchOpen((v) => !v)}
+                className="btn-icon w-8 h-8 text-[var(--foreground-secondary)]"
+                aria-label="Nachrichten durchsuchen"
+                title="Nachrichten durchsuchen"
+              >
+                <Search size={16} />
+              </button>
+              {me?.isGuest ? (
+                <div
+                  className="flex items-center gap-2 bg-[var(--border-subtle)] px-2.5 sm:px-3 py-2 rounded-full shrink-0 cursor-default"
+                  title="Als Gast siehst du nur die Anzahl, keine Namen"
+                >
+                  <Users size={16} className="text-[var(--foreground-secondary)]" />
+                  <span className="hidden sm:inline text-xs md:text-sm text-[var(--foreground)]">
+                    {members.length} Mitglieder
+                  </span>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setMembersOpen(true)}
+                  className="flex items-center gap-2 bg-[var(--border-subtle)] hover:bg-[color-mix(in_srgb,var(--foreground)_12%,transparent)] transition px-2.5 sm:px-3 py-2 rounded-full shrink-0"
+                  aria-label="Mitglieder anzeigen"
+                >
+                  <Users size={16} className="sm:hidden text-[var(--foreground-secondary)]" />
+                  <div className="hidden sm:flex -space-x-2">
+                    {topAvatars.map((m) => (
+                      <div key={m.id} className="relative">
+                        <Image
+                          src={m.avatar || "/avatar1.png"}
+                          alt={m.name}
+                          width={24}
+                          height={24}
+                          className="w-6 h-6 rounded-full object-cover border-2 border-[var(--surface-elevated)]"
+                        />
+                        <PresenceDot online={!!onlineUids[m.id]} />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <span className="hidden sm:inline text-xs md:text-sm text-[var(--foreground)]">
-                {members.length} Mitglieder
-              </span>
-            </button>
+                  <span className="hidden sm:inline text-xs md:text-sm text-[var(--foreground)]">
+                    {members.length} Mitglieder
+                  </span>
+                </button>
+              )}
+            </div>
           </div>
+
+          {searchOpen && (
+            <div className="px-3 sm:px-6 py-2 border-b border-[var(--border-subtle)]">
+              <div className="input-pill">
+                <Search size={14} className="text-[var(--foreground-secondary)]" />
+                <input
+                  autoFocus
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  type="text"
+                  placeholder="In diesem Channel suchen…"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="btn-icon w-6 h-6 shrink-0 text-[var(--foreground-secondary)]"
+                    aria-label="Suche leeren"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+              {q && (
+                <p className="text-[11px] text-[var(--foreground-secondary)] mt-1">
+                  {filteredChannelMessages.length} Treffer
+                </p>
+              )}
+            </div>
+          )}
 
           <div
             ref={scrollRef}
@@ -273,12 +396,13 @@ export default function ChatWindow() {
                 <p className="text-sm text-[var(--foreground-secondary)] mt-1 max-w-md">
                   Willkommen! Das ist der Anfang von #{activeChannel.name}.
                 </p>
-                <EncryptionBadge detail="Ende-zu-Ende-verschlüsselt · AES-256-GCM · Perioden-Rekeying alle 24h" />
+                <EncryptionBadge detail="Ende-zu-Ende-verschlüsselt · AES-256-GCM" />
               </div>
 
               <MessageList
                 key={`channel-${activeChannel.id}`}
-                messages={channelMessages}
+                saveContext={{ kind: "channel", channelId: activeChannel.id }}
+                messages={filteredChannelMessages}
                 reactionsByMessage={channelReactions}
                 threadCountByMessage={channelThreadCounts}
                 threadMessagesByParent={channelThreadMessages}
@@ -289,19 +413,51 @@ export default function ChatWindow() {
                 onSubscribeThread={subscribeThread}
                 onSendThreadReply={sendThreadReply}
                 onDeleteThreadReply={deleteThreadReply}
+                pinnedMessageIds={pinnedMessageIds}
+                canPin={activeServer?.myRole === "owner" || activeServer?.myRole === "admin"}
+                onPinMessage={pinMessage}
+                onUnpinMessage={unpinMessage}
+                onGetEditHistory={getMessageEditHistory}
+                customEmojis={customEmojis}
+                pollVotesByMessage={pollVotesByMessage}
+                onVotePoll={votePoll}
               />
             </div>
           </div>
 
+          {typingUserIds.length > 0 && (
+            <p className="px-4 sm:px-6 text-xs text-[var(--foreground-secondary)] italic">
+              {typingUserIds
+                .map((uid) => members.find((m) => m.id === uid)?.name || "Jemand")
+                .join(", ")}{" "}
+              {typingUserIds.length === 1 ? "schreibt…" : "schreiben…"}
+            </p>
+          )}
+
           <div className="px-2 sm:px-4 md:px-6 pb-4 sm:pb-5 pt-2 border-t border-[var(--border-subtle)]">
             <div className="mx-auto w-full max-w-3xl">
-              <MessageComposer
-                placeholder={`Nachricht an #${activeChannel.name}`}
-                members={members}
-                onSend={async (text, mentionedUids) =>
-                  await sendMessage(text, mentionedUids)
-                }
-              />
+              {me?.isGuest ? (
+                <p className="text-sm text-[var(--foreground-secondary)] text-center py-2">
+                  Melde dich an, um den vollen Funktionsumfang von Cryptflow nutzen zu können.
+                </p>
+              ) : activeChannel.announcementOnly &&
+              activeServer?.myRole !== "owner" &&
+              activeServer?.myRole !== "admin" ? (
+                <p className="text-sm text-[var(--foreground-secondary)] text-center py-2">
+                  Nur Owner/Admin können in diesem Ankündigungs-Channel schreiben.
+                </p>
+              ) : (
+                <MessageComposer
+                  placeholder={`Nachricht an #${activeChannel.name}`}
+                  members={members}
+                  onTyping={notifyTyping}
+                  customEmojis={customEmojis}
+                  enablePolls
+                  onSend={async (text, mentionedUids) =>
+                    await sendMessage(text, mentionedUids)
+                  }
+                />
+              )}
             </div>
           </div>
         </div>

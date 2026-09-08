@@ -9,9 +9,10 @@ import { useRouter } from "next/navigation";
 import { useState, useEffect, useRef } from "react";
 import { signOut } from "firebase/auth";
 import { auth } from "@/app/lib/firebase";
-import { Menu, ChevronDown, Sun, Moon } from "lucide-react";
+import { Menu, ChevronDown, Sun, Moon, Bookmark } from "lucide-react";
 import SettingsModal from "./SettingsModal";
 import InvitesPanel from "./InvitesPanel";
+import SavedMessagesModal from "./SavedMessagesModal";
 
 export default function Header({
   onToggleHeader,
@@ -24,6 +25,7 @@ export default function Header({
   const { endCurrentSession } = useSession();
   const [dropDown, setDropDown] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
   const router = useRouter();
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -86,6 +88,17 @@ export default function Header({
           {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
         </button>
 
+        <button
+          type="button"
+          onClick={() => setSavedOpen(true)}
+          className="btn-icon w-9 h-9 text-[var(--foreground-secondary)]"
+          aria-label="Gespeicherte Nachrichten"
+          title="Gespeicherte Nachrichten"
+        >
+          <Bookmark size={18} />
+        </button>
+        <SavedMessagesModal isOpen={savedOpen} onClose={() => setSavedOpen(false)} />
+
         <InvitesPanel />
 
         <span className="hidden sm:inline text-[var(--foreground)]">
@@ -96,7 +109,7 @@ export default function Header({
           alt="avatar"
           width={32}
           height={32}
-          className="rounded-full"
+          className="w-8 h-8 rounded-full object-cover"
         />
         <button
           type="button"

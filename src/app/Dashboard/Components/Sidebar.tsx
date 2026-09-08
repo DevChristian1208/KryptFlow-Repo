@@ -305,7 +305,10 @@ export default function Sidebar({
                       }`}
                     />
                     <Users size={18} className="text-[var(--foreground-secondary)]" />
-                    <span className="font-bold text-[16px]">Freunde</span>
+                    <span className="font-bold text-[16px] flex-1">Freunde</span>
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <UserSearch />
+                    </div>
                   </div>
 
                   <ul
@@ -331,7 +334,7 @@ export default function Sidebar({
                               alt={f.name}
                               width={24}
                               height={24}
-                              className="rounded-full"
+                              className="w-6 h-6 rounded-full object-cover"
                             />
                             {onlineUids[f.id] && (
                               <span
@@ -411,7 +414,7 @@ export default function Sidebar({
                                 alt={t.otherName}
                                 width={24}
                                 height={24}
-                                className="rounded-full"
+                                className="w-6 h-6 rounded-full object-cover"
                               />
                               {onlineUids[t.otherUserId] && (
                                 <span

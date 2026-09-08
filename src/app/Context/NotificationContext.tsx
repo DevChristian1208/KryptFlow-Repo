@@ -197,6 +197,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const acceptServerDirectInvite = useCallback(
     async (invite: ServerDirectInvite) => {
       if (!user?.id) return;
+      // Manche Accounts (z. B. jedes neu registrierte Konto) treten dem
+      // eingeladenen Server ggf. schon automatisch bei (z. B. dem
+      // HomeServer beim Account-Setup) — die Mitgliedschafts-Schreibregel
+      // erlaubt dann keinen erneuten Beitritt mehr, "Annehmen" würde bei
+      // jedem Versuch mit PERMISSION_DENIED scheitern. Erst prüfen und in
+      // dem Fall nur die veraltete Einladung aufräumen.
+      const alreadyMember = await get(
+        ref(db, `serverMembers/${invite.serverId}/${user.id}`)
+      );
+      if (alreadyMember.exists()) {
+        await update(ref(db), {
+          [`serverDirectInvites/${user.id}/${invite.serverId}`]: null,
+        });
+        return;
+      }
       await update(ref(db), {
         [`serverMembers/${invite.serverId}/${user.id}`]: {
           role: "member",

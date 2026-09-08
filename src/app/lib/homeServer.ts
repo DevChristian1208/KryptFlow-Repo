@@ -77,11 +77,15 @@ export async function ensureHomeServerBootstrapped(
  */
 export async function joinHomeServerIfNeeded(uid: string): Promise<void> {
   try {
-    const [serverSnap, memberSnap] = await Promise.all([
-      get(ref(db, `servers/${HOME_SERVER_ID}`)),
-      get(ref(db, `serverMembers/${HOME_SERVER_ID}/${uid}`)),
-    ]);
-    if (!serverSnap.exists() || memberSnap.exists()) return;
+    // NICHT vorab servers/{HOME_SERVER_ID} lesen: dessen .read-Regel
+    // verlangt (sobald der Server existiert) bereits Mitgliedschaft — für
+    // ein frisches Konto, das ja gerade erst beitreten will, wäre das ein
+    // Henne-Ei-Problem und die gesamte Funktion würde mit PERMISSION_DENIED
+    // abbrechen, bevor überhaupt beigetreten wird. Die eigene
+    // serverMembers/{id}/{uid}-Zeile ist dagegen immer für die eigene uid
+    // lesbar, unabhängig von bestehender Mitgliedschaft.
+    const memberSnap = await get(ref(db, `serverMembers/${HOME_SERVER_ID}/${uid}`));
+    if (memberSnap.exists()) return;
 
     await update(ref(db), {
       [`serverMembers/${HOME_SERVER_ID}/${uid}`]: { role: "member", joinedAt: Date.now() },

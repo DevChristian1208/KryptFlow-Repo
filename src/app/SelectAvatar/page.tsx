@@ -189,7 +189,7 @@ export default function SelectAvatar() {
                   alt={`Avatar ${index + 1}`}
                   width={40}
                   height={40}
-                  className="rounded-full"
+                  className="w-10 h-10 rounded-full object-cover"
                 />
               </button>
             ))}
