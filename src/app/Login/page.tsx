@@ -110,8 +110,6 @@ export default function Login() {
     logSecurityEvent(uid, "login");
 
     if (data) {
-      // Ausstehenden Server-Einladungslink (Klick auf /invite/... während
-      // ausgeloggt, siehe invite/[code]/page.tsx) jetzt nachträglich einlösen.
       let pendingInvite: string | null = null;
       try {
         pendingInvite = localStorage.getItem("cryptflow_pending_invite_code");
@@ -119,11 +117,6 @@ export default function Login() {
           localStorage.removeItem("cryptflow_pending_invite_code");
       } catch {}
       if (pendingInvite) {
-        // uid explizit durchreichen statt sich auf den user-State zu
-        // verlassen: setUser(...) oben aktualisiert diesen erst beim
-        // nächsten Rendern, im Closure hier wäre er noch null. Ein
-        // Fehlschlag beim Einlösen (abgelaufener/ungültiger Link) darf
-        // außerdem nicht den ansonsten erfolgreichen Login abbrechen.
         try {
           await joinServerByInviteCode(pendingInvite, uid);
         } catch (e) {
@@ -132,10 +125,6 @@ export default function Login() {
       }
       router.push("/Dashboard");
     } else {
-      // Kein newusers/$uid-Eintrag vorhanden: die Registrierung wurde nie
-      // abgeschlossen (Tab vor SelectAvatar geschlossen o. Ä.). Statt
-      // stillschweigend ein Profil mit Zufalls-Avatar anzulegen, zur
-      // Vervollständigung schicken statt direkt ins Dashboard.
       router.push("/SelectAvatar");
     }
   }
@@ -146,12 +135,6 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // Login ist sowohl per E-Mail als auch per Benutzername möglich —
-      // enthält die Eingabe kein "@", wird sie als Benutzername behandelt
-      // und zuerst auf die zugehörige E-Mail aufgelöst (usernames/$username
-      // ist bewusst ohne Login schon lesbar, siehe database.rules.json,
-      // sonst könnte man vor dem eigentlichen Login gar nicht herausfinden,
-      // welche E-Mail zum Benutzernamen gehört).
       let resolvedEmail = identifier.trim();
       if (!resolvedEmail.includes("@")) {
         const unameSnap = await get(
