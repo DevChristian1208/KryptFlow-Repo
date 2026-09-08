@@ -43,9 +43,6 @@ import {
 } from "@/app/lib/crypto";
 import type { ReactionGroup, Profile } from "./ChannelContext";
 
-/* -----------------------------------------
- * TYPES
- * ---------------------------------------*/
 export type InviteKind = "channelInvite" | "serverInvite";
 
 export type InvitePayload = {
@@ -85,12 +82,7 @@ type DMDbMessage = {
   deletedAt?: number;
   periodId?: string;
   seq?: number;
-  // Unverschlüsseltes Typ-Tag für Einladungs-Systemnachrichten (Chat-Karte
-  // statt normalem Text) — der eigentliche Inhalt (Kanal-/Servername etc.)
-  // bleibt Teil des verschlüsselten ciphertext, das Tag selbst verrät dem
-  // Server nur "diese Nachricht ist eine Einladungskarte", nicht den Inhalt.
   kind?: InviteKind;
-  // Legacy-Feld aus der Zeit vor der Verschlüsselungs-Umstellung:
   text?: string;
   from?: { id: string; name: string; email: string; avatar?: string };
 };
@@ -111,7 +103,6 @@ export type DMThread = {
   lastReadAt?: number;
 };
 
-// meta in db: dmThreads/<uid>/<otherUid>
 type DMThreadMeta = {
   otherName?: string;
   otherAvatar?: string;
@@ -119,10 +110,8 @@ type DMThreadMeta = {
   lastReadAt?: number;
 };
 
-// entire thread list for one user
 type DMThreadsDb = Record<string, DMThreadMeta>;
 
-// directMessages/<convId>
 type DirectMessagesDb = Record<string, DMDbMessage>;
 
 type DirectContextType = {
@@ -172,15 +161,6 @@ type NewUserDb = {
   avatar?: string;
 };
 
-/** Entschlüsselt+verifiziert eine einzelne DM-/Thread-Nachricht.
- *
- * Für geratchete Nachrichten (`m.periodId` gesetzt) wird zuerst ein
- * persistenter Klartext-Cache geprüft: der Message-Key wird nach dem ersten
- * erfolgreichen Entschlüsseln von der Ratchet-Kette verworfen (Forward
- * Secrecy), die App entschlüsselt aber bei jedem Firebase-Snapshot die
- * komplette Liste neu — ohne diesen Cache würde jede bereits gelesene
- * Nachricht beim nächsten erneuten Rendern dauerhaft "🔒 kann nicht
- * entschlüsselt werden" anzeigen (siehe crypto.ts, getCachedDmPlaintext). */
 async function decodeDmMessage(
   id: string,
   m: DMDbMessage,
@@ -228,10 +208,6 @@ async function decodeDmMessage(
     };
   }
 
-  // Einladungs-Systemnachrichten tragen ihren eigentlichen Inhalt als
-  // JSON-String im entschlüsselten Text — hier einmalig zentral geparst,
-  // damit Cache-Treffer und frisch entschlüsselte Nachrichten denselben Weg
-  // gehen.
   function finalize(text: string, verified: boolean | undefined): ChatMessage {
     if (m.kind) {
       try {
@@ -249,8 +225,7 @@ async function decodeDmMessage(
           invite,
         };
       } catch {
-        // fällt durch zur normalen Textdarstellung, falls das Parsen
-        // fehlschlägt (z. B. Alt-Daten)
+        // Alt-Daten ohne gültiges JSON: als normaler Text weiterbehandeln
       }
     }
     return {
@@ -313,14 +288,6 @@ async function decodeDmMessage(
   }
 }
 
-/**
- * Löst den Schlüssel für eine DM-Nachricht auf: mit `periodId`+`seq`
- * (Ratchet-Nachricht) wird die passende Perioden-Wurzel geholt und der
- * mitverfolgte Empfangs-Kettenschritt für den Absender berechnet — ohne
- * `periodId` (Alt-Nachrichten von vor dieser Umstellung, oder die ersten
- * Nachrichten einer Konversation vor Etablierung der ersten Periode) greift
- * der bisherige statisch abgeleitete Schlüssel als Fallback.
- */
 async function resolveDmKeyForMessage(
   m: DMDbMessage,
   myUid: string,
@@ -331,8 +298,7 @@ async function resolveDmKeyForMessage(
     let root = await getPeriodRoot(myUid, otherUid, m.periodId);
     // Fehlt nur der Ephemer-Schlüssel der Gegenseite (sie hat ihn evtl.
     // gerade erst veröffentlicht), lohnt sich ein kurzes erneutes Nachsehen
-    // statt sofort dauerhaft "Warte auf Schlüssel" zu zeigen — analog zum
-    // Retry beim Channel-Epochen-Envelope.
+    // statt sofort dauerhaft "Warte auf Schlüssel" zu zeigen.
     for (let attempt = 0; !root && attempt < 4; attempt++) {
       await new Promise((res) => setTimeout(res, 1000));
       root = await getPeriodRoot(myUid, otherUid, m.periodId);
@@ -388,9 +354,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
   const isGuest = user?.isGuest === true;
   const dmDisabled = isGuest || !user?.id;
 
-  // Wechselt der eingeloggte Nutzer im selben Tab (Logout -> anderer Login,
-  // DirectProvider wird dabei nicht neu gemountet), darf ein zuvor aktiver
-  // DM nicht für den neuen Nutzer stehen bleiben.
   const prevUserIdRef = useRef<string | null>(null);
   useEffect(() => {
     const uid = user?.id ?? null;
@@ -419,9 +382,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [activeDMUser?.name, activeDMUser?.email, activeDMUser?.avatar]
   );
 
-  /* -----------------------------------------
-   * THREADS LADEN
-   * ---------------------------------------*/
   useEffect(() => {
     if (messagesRef.current) {
       off(messagesRef.current);
@@ -468,9 +428,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     };
   }, [user?.id, dmDisabled]);
 
-  /* -----------------------------------------
-   * FREUNDE
-   * ---------------------------------------*/
   useEffect(() => {
     setFriends([]);
     if (dmDisabled) return;
@@ -494,9 +451,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     return () => off(r, "value", unsub);
   }, [user?.id, dmDisabled]);
 
-  /* -----------------------------------------
-   * BLOCKIERTE NUTZER (nur client-seitig durchgesetzt, siehe sendDirectMessage)
-   * ---------------------------------------*/
   useEffect(() => {
     setBlockedUids(new Set());
     if (dmDisabled) return;
@@ -531,9 +485,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user?.id]
   );
 
-  /* -----------------------------------------
-   * UNREAD COUNTS
-   * ---------------------------------------*/
   const unreadListeners = useRef<Record<string, () => void>>({});
   useEffect(() => {
     Object.values(unreadListeners.current).forEach((fn) => fn?.());
@@ -580,9 +531,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     };
   }, [dmThreads, user?.id, dmDisabled]);
 
-  /* -----------------------------------------
-   * DM NACHRICHTEN LADEN, ENTSCHLÜSSELN, VERIFIZIEREN
-   * ---------------------------------------*/
   useEffect(() => {
     if (messagesRef.current) {
       off(messagesRef.current);
@@ -618,16 +566,10 @@ export function DirectProvider({ children }: { children: ReactNode }) {
           )
         );
         list.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
-        // Nur übernehmen, falls inzwischen kein neuerer Snapshot eingetroffen
-        // ist (verhindert, dass eine langsamere ältere Entschlüsselung eine
-        // bereits aktuellere Liste überschreibt).
         if (mySeq !== seq) return;
         setDmMessages(list);
       })();
 
-      // Läuft bei jedem neuen Snapshot, solange dieser DM aktiv geöffnet ist
-      // — verhindert, dass der Ungelesen-Zähler für die gerade angeschaute
-      // Konversation trotzdem hochzählt.
       update(ref(db, `dmThreads/${user!.id}/${activeDMUserId}`), {
         lastReadAt: Date.now(),
       }).catch(() => {});
@@ -642,9 +584,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     };
   }, [activeDMUserId, dmDisabled, user, myProfile, otherProfile]);
 
-  /* -----------------------------------------
-   * Reaktionen & Thread-Zähler pro sichtbarer DM-Nachricht
-   * ---------------------------------------*/
   useEffect(() => {
     Object.values(reactionUnsubs.current).forEach((fn) => fn());
     reactionUnsubs.current = {};
@@ -710,7 +649,7 @@ export function DirectProvider({ children }: { children: ReactNode }) {
               arr.push(uid);
               grouped.set(emoji, arr);
             } catch {
-              // nicht entschlüsselbare Reaktion überspringen
+              continue;
             }
           }
 
@@ -752,9 +691,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     }
   }, [activeDMUserId, dmMessages, dmDisabled, user?.id]);
 
-  /* -----------------------------------------
-   * START DM
-   * ---------------------------------------*/
   const startDMWith = useCallback(
     async (otherUserId: string) => {
       if (dmDisabled) {
@@ -797,9 +733,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user, dmDisabled, showToast]
   );
 
-  /* -----------------------------------------
-   * SEND MESSAGE: verschlüsseln + signieren
-   * ---------------------------------------*/
   const sendDirectMessage = useCallback(
     async (text: string) => {
       if (dmDisabled) {
@@ -820,11 +753,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
       const cid = convIdFromIds(user!.id, activeDMUserId);
       const now = Date.now();
 
-      // Ratchet-Schlüssel bevorzugen (Forward Secrecy); ist noch keine
-      // Periode etabliert (allererste Nachricht(en) einer Konversation,
-      // oder Gegenseite noch nicht reagiert), auf den statisch abgeleiteten
-      // Schlüssel zurückfallen — die Nachricht bleibt dann ohne periodId/seq
-      // und wird beim Lesen entsprechend über denselben Fallback entschlüsselt.
       const period = await ensureDmPeriodRoot(user.id, activeDMUserId);
       let ciphertext: string, iv: string, ratchetMeta: { periodId?: string; seq?: number };
       if (period) {
@@ -911,12 +839,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user, activeDMUserId, activeDMUser, dmDisabled, showToast, blockedUids]
   );
 
-  /* -----------------------------------------
-   * SYSTEMNACHRICHT SENDEN (Einladungskarten) — anders als sendDirectMessage
-   * an ein beliebiges Ziel statt an die gerade geöffnete Konversation, da
-   * eine Einladung z. B. aus dem Mitglieder-/Server-Einladungsdialog heraus
-   * verschickt wird, nicht zwingend aus einem offenen DM-Fenster.
-   * ---------------------------------------*/
   const sendDirectSystemMessage = useCallback(
     async (otherUserId: string, kind: InviteKind, invite: InvitePayload) => {
       if (dmDisabled || !user?.id || otherUserId === user.id) return;
@@ -978,9 +900,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user, dmDisabled, blockedUids]
   );
 
-  /* -----------------------------------------
-   * NACHRICHT BEARBEITEN
-   * ---------------------------------------*/
   const editDirectMessage = useCallback(
     async (messageId: string, newText: string) => {
       if (!user?.id || !activeDMUserId) throw new Error("Nicht eingeloggt.");
@@ -989,12 +908,10 @@ export function DirectProvider({ children }: { children: ReactNode }) {
 
       const existing = dmMessages.find((m) => m.id === messageId);
       if (existing?.periodId) {
-        // Ratchet-Nachrichten sind bewusst unveränderlich: der zum
-        // ursprünglichen Verschlüsseln verwendete Kettenschlüssel ist nach
-        // dem Senden bereits verworfen (genau das ist der Sinn von Forward
-        // Secrecy) und kann nicht zum erneuten Verschlüsseln wiederverwendet
-        // werden. Löschen (Tombstone) funktioniert weiterhin, da dafür kein
-        // Schlüssel gebraucht wird.
+        // Ratchet-Nachrichten sind bewusst unveränderlich: der Kettenschlüssel
+        // wurde nach dem Senden bereits verworfen (Forward Secrecy) und kann
+        // nicht erneut zum Verschlüsseln benutzt werden. Löschen funktioniert
+        // weiterhin, da dafür kein Schlüssel gebraucht wird.
         throw new Error(
           "Diese Nachricht kann nicht mehr bearbeitet werden (Perfect-Forward-Secrecy-Schlüssel wurde bereits verworfen)."
         );
@@ -1018,9 +935,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user, activeDMUserId, dmMessages]
   );
 
-  /* -----------------------------------------
-   * NACHRICHT LÖSCHEN (Soft-Delete/Tombstone)
-   * ---------------------------------------*/
   const deleteDirectMessage = useCallback(
     async (messageId: string) => {
       if (!user?.id || !activeDMUserId) throw new Error("Nicht eingeloggt.");
@@ -1037,9 +951,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user, activeDMUserId]
   );
 
-  /* -----------------------------------------
-   * REAKTION TOGGELN
-   * ---------------------------------------*/
   const toggleDirectReaction = useCallback(
     async (messageId: string, emoji: string) => {
       if (!user?.id || !activeDMUserId) return;
@@ -1096,9 +1007,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user, activeDMUserId, reactionsByMessage, showToast, blockedUids]
   );
 
-  /* -----------------------------------------
-   * THREAD-ANTWORTEN
-   * ---------------------------------------*/
   const subscribeDirectThread = useCallback(
     (parentMessageId: string): (() => void) => {
       if (!user?.id || !activeDMUserId) return () => {};
@@ -1214,9 +1122,6 @@ export function DirectProvider({ children }: { children: ReactNode }) {
     [user, activeDMUserId]
   );
 
-  /* -----------------------------------------
-   * CLEAR DM
-   * ---------------------------------------*/
   const clearDM = useCallback(() => {
     setActiveDMUserId(null);
     setActiveDMUser(null);

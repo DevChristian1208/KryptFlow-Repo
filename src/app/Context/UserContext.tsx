@@ -65,15 +65,6 @@ export function UserProvider({ children }: { children: ReactNode }) {
         }
 
         try {
-          // Direkt nach einem echten Login/einer Registrierung liegt kurz
-          // das Klartext-Passwort vor (siehe pendingLoginPassword.ts) —
-          // dann läuft die vollautomatische Variante: fehlende lokale
-          // Identität wird aus dem passwortverschlüsselten Backup
-          // wiederhergestellt (statt stillschweigend eine neue zu
-          // erzeugen), und das Backup wird direkt im Anschluss aktuell
-          // gehalten. Ein reiner Sitzungs-Reload hat kein Passwort zur
-          // Verfügung — dafür der interaktive Dialog als Fallback, falls
-          // genau dann lokale Schlüssel fehlen sollten.
           let setupPromise = identitySetupRef.current.get(authUser.uid);
           if (!setupPromise) {
             setupPromise = (async () => {
@@ -93,9 +84,6 @@ export function UserProvider({ children }: { children: ReactNode }) {
             identitySetupRef.current.set(authUser.uid, setupPromise);
           }
           await setupPromise;
-          // Best-effort, kein await nötig (blockiert das Laden des Nutzers
-          // nicht) — legt den HomeServer beim Login des designierten
-          // Owner-Accounts einmalig an, falls er noch nicht existiert.
           ensureHomeServerBootstrapped(authUser.uid, authUser.email).catch((e) =>
             console.error("[UserContext] HomeServer-Bootstrap fehlgeschlagen:", e)
           );
@@ -117,9 +105,6 @@ export function UserProvider({ children }: { children: ReactNode }) {
             return;
           }
 
-          // Fallback: Auth-Konto existiert, aber es wurde noch kein
-          // Profil unter newusers/ angelegt (z. B. frischer Gast vor
-          // Abschluss der Avatar-Auswahl).
           const fallbackUser: User = {
             id: authUser.uid,
             name: authUser.isAnonymous

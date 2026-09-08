@@ -41,17 +41,7 @@ import {
   type EncryptedPayload,
 } from "@/app/lib/crypto";
 
-// Perioden-Rekeying für Channels: alle 24h ein frischer Channel-Key
-// (Forward Secrecy — ein kompromittierter Schlüssel legt nur die aktuelle
-// Periode offen, nicht die komplette Historie). Pro-Nachricht-Ratchet ist
-// für Gruppen bewusst nicht umgesetzt (bräuchte ein eigenes Sender-Key-
-// Schema, siehe Plan) — DMs haben stattdessen einen echten Ratchet
-// (DirectContext.tsx).
 const CHANNEL_EPOCH_DURATION_MS = 24 * 60 * 60 * 1000;
-
-// ---------------------------------------------------
-// TYPES
-// ---------------------------------------------------
 
 type ChannelDb = {
   name?: string;
@@ -76,7 +66,6 @@ type ChannelMessageDb = {
   deleted?: boolean;
   deletedAt?: number;
   epochId?: string;
-  // Legacy-Felder aus der Zeit vor der Verschlüsselungs-Umstellung:
   text?: string;
   user?: { name?: string; email?: string; avatar?: string };
 };
@@ -124,7 +113,6 @@ export type Message = {
   editedAt?: number;
   deleted?: boolean;
   epochId?: string;
-  /** Nur bei DMs: Einladungskarte statt normalem Text (siehe DirectContext). */
   kind?: "channelInvite" | "serverInvite";
   invite?: {
     channelId?: string;
@@ -191,11 +179,6 @@ type NewUserDb = {
 
 const ChannelContext = createContext<ChannelContextType | undefined>(undefined);
 
-/**
- * Entschlüsselt+verifiziert eine einzelne Nachricht (Haupt-Channel oder
- * Thread-Antwort — gleiche Struktur). Wird von mehreren Stellen
- * wiederverwendet, damit die Logik nicht dupliziert wird.
- */
 async function decodeMessage(
   id: string,
   m: ChannelMessageDb,
@@ -216,7 +199,6 @@ async function decodeMessage(
     };
   }
 
-  // Alte, unverschlüsselte Nachrichten aus der Zeit vor der Umstellung
   if (!m.ciphertext && m.text) {
     return {
       id,
@@ -286,9 +268,6 @@ async function decodeMessage(
   }
 }
 
-// ---------------------------------------------------
-// Warten bis Auth bereit ist
-// ---------------------------------------------------
 function useAuthReady() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -298,9 +277,6 @@ function useAuthReady() {
   return ready;
 }
 
-// ---------------------------------------------------
-// PROVIDER
-// ---------------------------------------------------
 export function ChannelProvider({ children }: { children: ReactNode }) {
   const { user } = useUser();
   const { showToast } = useToast();
@@ -382,13 +358,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         return key;
       } catch (e) {
         // Erwartbar (kein Bug): nach einem Origin-/Geräte-Wechsel ohne
-        // Schlüssel-Backup kann das eigene Gerät den EIGENEN alten Legacy-Key
-        // nicht mehr entschlüsseln — Selbstheilung ist hier unmöglich (siehe
-        // keyVersion-Reparatur oben), nur ein anderes, noch gültiges
+        // Schlüssel-Backup kann das eigene Gerät den eigenen alten Legacy-Key
+        // nicht mehr entschlüsseln — nur ein anderes, noch gültiges
         // Mitglied kann den Envelope neu wrappen. Kein console.error, damit
         // dieser für den Nutzer nicht reparierbare Fall nicht wie ein Absturz
         // aussieht.
-        console.debug("[ChannelContext] Eigener Legacy-Channel-Key nicht entschlüsselbar (vermutlich alter Schlüssel vor Geräte-/Origin-Wechsel):", e);
+        console.debug("[ChannelContext] Eigener Legacy-Channel-Key nicht entschlüsselbar:", e);
         return null;
       }
     },
@@ -412,20 +387,16 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         channelEpochKeyCache.current.set(cacheKey, key);
         return key;
       } catch (e) {
-        console.debug("[ChannelContext] Eigener Epochen-Key nicht entschlüsselbar (vermutlich alter Schlüssel vor Geräte-/Origin-Wechsel):", e);
+        console.debug("[ChannelContext] Eigener Epochen-Key nicht entschlüsselbar:", e);
         return null;
       }
     },
     [user?.id]
   );
 
-  /**
-   * Erzeugt (falls noch niemand das getan hat) den Channel-Key für eine
-   * Perioden-Epoche und wrapt ihn für alle übergebenen Mitglieder — per
-   * Firebase-Transaction atomar "beansprucht", damit zwei gleichzeitig
-   * aktive Clients nicht mit unterschiedlichen Schlüsseln für dieselbe
-   * Epoche kollidieren (siehe Plan: Race-Auflösung ohne Custom-Krypto-Risiko).
-   */
+  // Per Firebase-Transaction atomar "beansprucht", damit zwei gleichzeitig
+  // aktive Clients nicht mit unterschiedlichen Schlüsseln für dieselbe
+  // Epoche kollidieren.
   const claimChannelEpoch = useCallback(
     async (channelId: string, epochId: string, memberUids: string[]) => {
       const nodeRef = ref(db, `channelKeyEpochs/${channelId}/${epochId}`);
@@ -435,13 +406,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       const channelKey = await generateChannelKey();
       const envelopes: Record<string, ChannelKeyEnvelope> = {};
       for (const uid of memberUids) {
-        // bypassCache: das Anlegen einer Epoche passiert selten (max. 1x pro
-        // Kanal/Tag) — die minimale Extra-Latenz hier ist es wert, damit ein
-        // bis zu 60s alter zwischengespeicherter Public Key (siehe
-        // PUBLIC_KEY_CACHE_TTL_MS) niemals dazu führt, dass ausgerechnet der
-        // Envelope für ein gerade erst (neu) veröffentlichtes Mitglied —
-        // ggf. sogar für einen selbst — gegen den falschen Schlüssel
-        // gewrappt wird und damit für immer unentschlüsselbar bliebe.
+        // bypassCache: das Anlegen einer Epoche passiert selten — die
+        // minimale Extra-Latenz hier ist es wert, damit ein bis zu 60s alter
+        // zwischengespeicherter Public Key niemals dazu führt, dass ein
+        // Envelope für ein gerade erst (neu) veröffentlichtes Mitglied gegen
+        // den falschen Schlüssel gewrappt wird und damit für immer
+        // unentschlüsselbar bliebe.
         const envelope = await wrapChannelKeyForMember(channelKey, uid, {
           bypassCache: true,
         });
@@ -457,11 +427,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  // -------------------------------------------------------
-  //  Auto-Member: Nutzer in alle Channels aufnehmen + fehlende
-  //  Channel-Key-Envelopes (Legacy + alle Perioden-Epochen) für andere
-  //  Mitglieder nachliefern
-  // -------------------------------------------------------
   const ensureUserInAllChannels = useCallback(async () => {
     if (!user?.id || servers.length === 0) return;
 
@@ -473,9 +438,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         ([, chan]) => chan.serverId && myServerIds.has(chan.serverId)
       );
 
-      // Server-Mitgliederlisten vorab EINMAL pro Server parallel laden
-      // (statt verschachtelt pro Kanal sequenziell) — mehrere Kanäle
-      // desselben Servers teilen sich denselben Fetch.
       const neededServerIds = Array.from(
         new Set(
           relevantEntries
@@ -494,22 +456,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         })
       );
 
-      // Mitgliedschaft selbst wird hier bewusst NICHT vergeben — bei
-      // eingeschränkten Kanälen läuft Beitritt ausschließlich über eine
-      // angenommene Einladung (channelInvites, siehe acceptChannelInvite)
-      // oder als Ersteller; bei nicht-eingeschränkten Kanälen ergibt sich
-      // die Zugriffsberechtigung bereits aus der Server-Mitgliedschaft
-      // (siehe Rules). Diese Funktion liefert nur fehlende Schlüssel-
-      // Envelopes nach — bei nicht-eingeschränkten Kanälen für ALLE
-      // aktuellen Server-Mitglieder, bei eingeschränkten nur für die
-      // explizit eingetragenen.
-      //
-      // Alle Kanäle laufen parallel statt nacheinander: bei mehreren
-      // Servern/Kanälen sammelte sich hier sonst schnell ein Vielfaches an
-      // sequenziellen Firebase-Roundtrips an — genau die Zeit, die einem
-      // gerade beigetretenen Mitglied fehlt, dessen sendMessage() nur ein
-      // kurzes Zeitfenster auf genau diesen Nachlieferungs-Lauf wartet
-      // (siehe getCurrentChannelEpochKey).
+      // Mitgliedschaft selbst wird hier bewusst NICHT vergeben (läuft über
+      // channelInvites bzw. Server-Mitgliedschaft, siehe Rules) — diese
+      // Funktion liefert nur fehlende Schlüssel-Envelopes nach. Alle Kanäle
+      // laufen parallel statt nacheinander, damit ein gerade beigetretenes
+      // Mitglied nicht durch sequenzielle Roundtrips ins Leere läuft (siehe
+      // getCurrentChannelEpochKey).
       await Promise.all(
         relevantEntries.map(async ([cid, chan]) => {
           let memberUids: string[];
@@ -520,8 +472,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
             memberUids = serverMembersCache.get(chan.serverId!) || [];
           }
 
-          // Legacy (flacher, dauerhafter) Channel-Key — bleibt für Alt-
-          // Nachrichten ohne epochId als Fallback bestehen.
           const channelKey = await getOwnChannelKey(cid);
           if (channelKey) {
             const keysSnap = await get(ref(db, `channelKeys/${cid}`));
@@ -530,11 +480,10 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
             await Promise.all(
               memberUids.map(async (uid) => {
                 const existing = existingKeys[uid];
-                // Nicht nur "fehlt komplett", sondern auch "ist für ein
-                // inzwischen ersetztes Schlüsselpaar gewrappt" nachliefern —
-                // sonst bleibt ein Mitglied nach einem Origin-/Geräte-Wechsel
-                // (neues Schlüsselpaar, siehe ensureIdentityKeys) dauerhaft
-                // mit einem für sich selbst unentschlüsselbaren Envelope stehen.
+                // Auch "gehört zu einem inzwischen ersetzten Schlüsselpaar"
+                // nachliefern, nicht nur "fehlt komplett" — sonst bleibt ein
+                // Mitglied nach einem Origin-/Geräte-Wechsel dauerhaft mit
+                // einem für sich selbst unentschlüsselbaren Envelope stehen.
                 const currentVersion = await getPublicKeyVersion(uid, {
                   bypassCache: true,
                 });
@@ -549,10 +498,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
             );
           }
 
-          // Perioden-Epochen: fehlende Envelopes für alle bereits
-          // existierenden Epochen nachliefern (nur möglich, wenn man selbst
-          // schon einen gültigen Envelope für diese Epoche hat), plus die
-          // aktuelle Epoche anlegen, falls sie noch gar nicht existiert.
           const epochsSnap = await get(ref(db, `channelKeyEpochs/${cid}`));
           const epochs =
             (epochsSnap.val() as Record<string, Record<string, ChannelKeyEnvelope>> | null) ||
@@ -605,11 +550,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.id, servers, getOwnChannelKey, claimChannelEpoch]);
 
-  /**
-   * Löst den Schlüssel für eine Nachricht auf: mit `epochId` wird die
-   * passende Perioden-Epoche geholt, ohne `epochId` (Alt-Nachrichten von
-   * vor dieser Umstellung) greift der bisherige flache Channel-Key.
-   */
   const resolveChannelKey = useCallback(
     (channelId: string, epochId?: string): Promise<CryptoKey | null> =>
       epochId
@@ -618,8 +558,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     [getOwnChannelEpochKey, getOwnChannelKey]
   );
 
-  /** Aktuell nutzbarer Epochen-Schlüssel für neue, ausgehende Nachrichten
-   * (erzeugt die Epoche bei Bedarf, statt nur zu warten). */
   const getCurrentChannelEpochKey = useCallback(
     async (channelId: string): Promise<{ epochId: string; key: CryptoKey } | null> => {
       const epochId = epochIdForTimestamp(CHANNEL_EPOCH_DURATION_MS);
@@ -627,13 +565,9 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       if (!key) {
         // Gleiche Mitgliederquelle wie in ensureUserInAllChannels: bei
         // nicht-eingeschränkten Kanälen ist channels/{id}/members oft nur
-        // mit dem Ersteller gefüllt (Zugriff ergibt sich sonst allein aus
-        // der Server-Mitgliedschaft) — würde man hier trotzdem nur diese
-        // Liste zum Umschlag-Wrappen benutzen, bekäme bei einem
-        // Epochenwechsel nur der Ersteller einen gültigen Envelope, die
-        // per Transaction "beanspruchte" Epoche ließe sich danach nicht
-        // mehr korrigieren, und jedes andere Mitglied bliebe dauerhaft
-        // ohne Schlüssel für diese Epoche.
+        // mit dem Ersteller gefüllt, würde man hier trotzdem nur diese Liste
+        // zum Umschlag-Wrappen benutzen, bekäme bei einem Epochenwechsel nur
+        // der Ersteller einen gültigen Envelope.
         const chanSnap = await get(ref(db, `channels/${channelId}`));
         const chan = chanSnap.val() as ChannelDb | null;
         let memberUids: string[];
@@ -653,15 +587,11 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         // Selten, aber möglich: die Epoche existierte schon (z. B. von
         // einem anderen, gerade erst beigetretenen Mitglied angelegt),
         // enthielt aber noch keinen Umschlag für mich — claimChannelEpoch()
-        // bricht dann sofort ab (niemand überschreibt eine bestehende
-        // Epoche). Ohne fremde Hilfe (jemand mit gültigem Zugriff, dessen
-        // Client ensureUserInAllChannels erneut durchläuft) lässt sich das
-        // aus der eigenen Sitzung heraus nicht direkt reparieren — aber
-        // genau das passiert oft binnen Sekunden von selbst, sobald ein
-        // anderes, bereits eingeweihtes Mitglied gerade online ist/die App
-        // öffnet. Ein paar Mal kurz erneut nachsehen, bevor endgültig
+        // bricht dann sofort ab. Das löst sich oft binnen Sekunden von
+        // selbst, sobald ein anderes, bereits eingeweihtes Mitglied gerade
+        // online ist. Ein paar Mal kurz erneut nachsehen, bevor endgültig
         // aufgegeben wird, macht diesen häufigen Fall für den Nutzer
-        // unsichtbar, statt sofort einen Fehler zu zeigen.
+        // unsichtbar.
         for (let attempt = 0; !key && attempt < 15; attempt++) {
           await new Promise((r) => setTimeout(r, 1200));
           key = await getOwnChannelEpochKey(channelId, epochId);
@@ -672,12 +602,10 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     [user, getOwnChannelEpochKey, claimChannelEpoch]
   );
 
-  // Läuft nicht nur einmal beim Login, sondern bei jeder Änderung am
-  // channels-Baum erneut — so liefert JEDES bereits eingeweihte, gerade
-  // geöffnete Mitglied fehlende Channel-Key-Envelopes nach, sobald ein
-  // neues Mitglied auftaucht, statt dass Neue bis zu einem Reload eines
-  // anderen Mitglieds ohne Schlüssel dastehen. ensureUserInAllChannels ist
-  // idempotent (überspringt bereits vorhandene Mitgliedschaften/Envelopes).
+  // Läuft bei jeder Änderung am channels-Baum erneut (nicht nur beim Login),
+  // damit jedes bereits eingeweihte, gerade geöffnete Mitglied fehlende
+  // Channel-Key-Envelopes nachliefert, sobald ein neues Mitglied auftaucht.
+  // ensureUserInAllChannels ist idempotent.
   useEffect(() => {
     if (!authReady || !user?.id) return;
     const r = ref(db, "channels");
@@ -687,12 +615,9 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, [authReady, user?.id, ensureUserInAllChannels]);
 
-  // Tritt jemand einem Server bei (nicht-eingeschränkte Kanäle: Zugriff
-  // ergibt sich allein aus der Server-Mitgliedschaft), ändert sich dabei nur
-  // serverMembers/userServers — NICHT channels. Ohne diesen zusätzlichen
-  // Listener würden bereits geöffnete, andere Mitglieder das neue Mitglied
-  // nie bemerken und ihm keinen Channel-Key-Envelope nachliefern, bis
-  // zufällig mal etwas an channels selbst geändert wird oder sie neu laden.
+  // Tritt jemand einem Server bei, ändert sich dabei nur serverMembers, NICHT
+  // channels — ohne diesen zusätzlichen Listener würden andere Mitglieder das
+  // neue Mitglied nie bemerken und ihm keinen Envelope nachliefern.
   useEffect(() => {
     if (!authReady || !user?.id || servers.length === 0) return;
     const unsubs = servers.map((s) =>
@@ -703,9 +628,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsubs.forEach((u) => u());
   }, [authReady, user?.id, servers, ensureUserInAllChannels]);
 
-  // ---------------------------------------------------
-  // CHANNELS LADEN
-  // ---------------------------------------------------
   useEffect(() => {
     if (!authReady || !user?.id || !activeServerId) {
       setChannels([]);
@@ -717,10 +639,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const unsub = onValue(r, (snap) => {
       const raw = (snap.val() || {}) as Record<string, ChannelDb>;
 
-      // Sichtbar sind: alle nicht-eingeschränkten Kanäle des aktiven Servers
-      // (Server-Mitgliedschaft reicht, keine einzelne Einladung nötig — echtes
-      // Discord-Verhalten) sowie eingeschränkte Kanäle, in denen man explizit
-      // Mitglied ist (weiterhin über channelInvites/MembersModal gesteuert).
       const list: Channel[] = Object.entries(raw)
         .filter(
           ([, c]) =>
@@ -756,11 +674,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     [channels, activeChannelId]
   );
 
-  // ---------------------------------------------------
-  // AKTIVE CHANNEL-MITGLIEDER (live Mitgliedschaft, Namen/Avatare
-  // einmalig aufgelöst) — wird sowohl für die Mitglieder-Anzeige als
-  // auch für die @-Erwähnungs-Autovervollständigung verwendet.
-  // ---------------------------------------------------
   useEffect(() => {
     setChannelMembers([]);
     if (!activeChannelId || !activeChannel) return;
@@ -768,10 +681,8 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     // Bei eingeschränkten Channels ergibt sich die Mitgliederliste aus der
     // expliziten members-Map dort; bei offenen Channels dagegen aus ALLEN
     // Server-Mitgliedern (channels/{id}/members enthält dort meist nur den
-    // Ersteller, siehe ensureUserInAllChannels — Zugriff läuft für alle
-    // anderen über die Server-Mitgliedschaft, nicht über diese Map). Ohne
-    // diese Unterscheidung zeigte die Mitgliederliste offener Channels
-    // fälschlich nur den Ersteller statt aller tatsächlichen Mitglieder.
+    // Ersteller). Ohne diese Unterscheidung zeigte die Mitgliederliste
+    // offener Channels fälschlich nur den Ersteller.
     const r =
       activeChannel.restricted || !activeChannel.serverId
         ? ref(db, `channels/${activeChannelId}/members`)
@@ -802,9 +713,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, [activeChannelId, activeChannel, user]);
 
-  // ---------------------------------------------------
-  // ANGEHEFTETE NACHRICHTEN
-  // ---------------------------------------------------
   useEffect(() => {
     setPinnedMessageIds(new Set());
     if (!activeChannelId) return;
@@ -815,12 +723,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, [activeChannelId]);
 
-  // ---------------------------------------------------
-  // TIPP-INDIKATOR — kein RTDB-TTL vorhanden, daher clientseitig veraltete
-  // (>6s alte) Einträge herausfiltern; der Schreiber selbst räumt seinen
-  // eigenen Eintrag zusätzlich per onDisconnect + Timeout auf (siehe
-  // notifyTyping unten).
-  // ---------------------------------------------------
   useEffect(() => {
     setTypingUserIds([]);
     if (!activeChannelId || !user?.id) return;
@@ -836,9 +738,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, [activeChannelId, user?.id]);
 
-  // ---------------------------------------------------
-  // CHANNEL-MESSAGES LADEN, ENTSCHLÜSSELN, VERIFIZIEREN
-  // ---------------------------------------------------
   useEffect(() => {
     setMessages([]);
     if (!activeChannelId || !user?.id) return;
@@ -863,9 +762,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
           )
         );
         list.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
-        // Nur übernehmen, falls kein neuerer Snapshot inzwischen eingetroffen
-        // ist (verhindert, dass eine langsamere ältere Entschlüsselung eine
-        // bereits aktuellere Liste überschreibt).
         if (mySeq === seq) setMessages(list);
       })();
     });
@@ -873,11 +769,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, [activeChannelId, user?.id, resolveChannelKey, resolveProfile]);
 
-  // ---------------------------------------------------
-  // Reaktionen & Thread-Zähler: pro sichtbarer Nachricht
-  // ---------------------------------------------------
   useEffect(() => {
-    // Channel gewechselt: alle bisherigen Listener + gecachten Zustand verwerfen
     Object.values(reactionUnsubs.current).forEach((fn) => fn());
     reactionUnsubs.current = {};
     Object.values(pollVoteUnsubs.current).forEach((fn) => fn());
@@ -917,7 +809,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
               arr.push(uid);
               grouped.set(emoji, arr);
             } catch {
-              // nicht entschlüsselbare Reaktion überspringen
+              continue;
             }
           }
 
@@ -934,12 +826,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   }, [activeChannelId, messages, resolveChannelKey]);
 
-  // ---------------------------------------------------
-  // UMFRAGE-STIMMEN LIVE MITLESEN — exakt dasselbe Muster wie Reaktionen
-  // oben: pro Nachricht ein Listener auf channelPollVotes/{channelId}/{id},
-  // jede Stimme trägt ihre eigene epochId (unabhängig von der Epoche der
-  // Umfrage-Nachricht selbst, genau wie bei Reaktionen).
-  // ---------------------------------------------------
   useEffect(() => {
     if (!activeChannelId) return;
     const currentIds = new Set(messages.map((m) => m.id));
@@ -966,7 +852,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
               const idx = Number(text);
               if (Number.isInteger(idx)) votes[uid] = idx;
             } catch {
-              // nicht entschlüsselbare Stimme überspringen
+              continue;
             }
           }
           setPollVotesByMessage((prev) => ({ ...prev, [id]: votes }));
@@ -1000,9 +886,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   }, [activeChannelId, messages]);
 
-  // ---------------------------------------------------
-  // CHANNEL ERSTELLEN
-  // ---------------------------------------------------
   const createChannel = async (
     name: string,
     description?: string,
@@ -1024,19 +907,9 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       const createdAt = Date.now();
 
       // Kanal-Anlage + Rate-Limit-Zeitstempel atomar in einem Aufruf, damit
-      // die Regel erzwingen kann, dass beide zusammengehören (verhindert,
-      // dass ein Client die Drosselung durch Auslassen des Zeitstempels
-      // umgeht — siehe database.rules.json). Mitglied wird hier bewusst
-      // NUR der Ersteller: bei nicht-eingeschränkten Kanälen ergibt sich der
-      // Zugriff für alle anderen aus der Server-Mitgliedschaft (Rules),
-      // eingeschränkte Kanäle laufen über das Einladungssystem
-      // (channelInvites, siehe inviteToChannel).
-      //
-      // skipRateLimit: beim Anlegen mehrerer Startkanäle direkt bei der
-      // Server-Erstellung (siehe CreateOrJoinServerModal) würde die normale
-      // 5s-Drossel jeden Kanal außer dem ersten blockieren — die Regel
-      // verknüpft channels/{id} nicht zwingend mit dem Zeitstempel, daher
-      // ist das Auslassen hier unschädlich.
+      // die Regel erzwingen kann, dass beide zusammengehören. skipRateLimit:
+      // beim Anlegen mehrerer Startkanäle direkt bei der Server-Erstellung
+      // würde die normale Drossel jeden Kanal außer dem ersten blockieren.
       try {
         await update(ref(db), {
           [`channels/${channelId}`]: {
@@ -1079,10 +952,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // ---------------------------------------------------
-  // @-ERWÄHNUNGEN: Benachrichtigungs-Fanout (unverschlüsselte Metadaten,
-  // kein Nachrichteninhalt — siehe channelMentions in database.rules.json)
-  // ---------------------------------------------------
   const fanOutMentions = async (
     messageId: string,
     mentionedUids: string[] | undefined
@@ -1105,9 +974,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // ---------------------------------------------------
-  // MESSAGE SENDEN: verschlüsseln + signieren
-  // ---------------------------------------------------
   const sendMessage = async (text: string, mentionedUids?: string[]) => {
     if (!user?.id) throw new Error("Nicht eingeloggt.");
     if (!activeChannelId) throw new Error("Kein Channel aktiv.");
@@ -1129,8 +995,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const createdAt = Date.now();
 
     try {
-      // Nachricht + Rate-Limit-Zeitstempel atomar in einem Aufruf (siehe
-      // database.rules.json: die Regel erzwingt, dass beide zusammenpassen).
       await update(ref(db), {
         [`channelMessages/${activeChannelId}/${msgRef.key}`]: {
           ciphertext,
@@ -1150,9 +1014,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     await fanOutMentions(msgRef.key!, mentionedUids);
   };
 
-  // ---------------------------------------------------
-  // NACHRICHT BEARBEITEN
-  // ---------------------------------------------------
   const editMessage = async (messageId: string, newText: string) => {
     if (!user?.id) throw new Error("Nicht eingeloggt.");
     if (!activeChannelId) throw new Error("Kein Channel aktiv.");
@@ -1162,8 +1023,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
 
     // Mit demselben Schlüssel neu verschlüsseln, mit dem die Nachricht
     // ursprünglich stand — ihr gespeichertes epochId-Feld bleibt beim
-    // Bearbeiten unverändert, die Verschlüsselung muss also zur selben
-    // (ggf. inzwischen nicht mehr aktuellen) Periode passen.
+    // Bearbeiten unverändert.
     const existing = messages.find((m) => m.id === messageId);
     const channelKey = await resolveChannelKey(activeChannelId, existing?.epochId);
     if (!channelKey) throw new Error("Kein Verschlüsselungs-Schlüssel verfügbar.");
@@ -1171,12 +1031,10 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const { ciphertext, iv } = await encryptText(channelKey, text);
     const signature = await signText(user.id, ciphertext);
 
-    // Alte Fassung vor dem Überschreiben als Historien-Eintrag sichern.
-    // `messages` enthält nur den bereits entschlüsselten Text, nicht das
-    // rohe Chiffrat — deshalb hier separat aus Firebase nachladen. Eigener
-    // Aufruf statt im selben Mehrfach-Schreibvorgang wie die eigentliche
-    // Bearbeitung: der Historien-Pfad ist write-once (siehe Rules), ein
-    // Fehlschlag dabei soll die eigentliche Bearbeitung nicht blockieren.
+    // Alte Fassung vor dem Überschreiben als Historien-Eintrag sichern,
+    // eigener Aufruf statt im selben Mehrfach-Schreibvorgang: der
+    // Historien-Pfad ist write-once, ein Fehlschlag dabei soll die
+    // eigentliche Bearbeitung nicht blockieren.
     const rawSnap = await get(ref(db, `channelMessages/${activeChannelId}/${messageId}`));
     const raw = rawSnap.val() as ChannelMessageDb | null;
     if (raw?.ciphertext && raw.iv && raw.signature) {
@@ -1201,9 +1059,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  // ---------------------------------------------------
-  // NACHRICHT LÖSCHEN (Soft-Delete/Tombstone)
-  // ---------------------------------------------------
   const deleteMessage = async (messageId: string) => {
     if (!user?.id) throw new Error("Nicht eingeloggt.");
     if (!activeChannelId) throw new Error("Kein Channel aktiv.");
@@ -1217,9 +1072,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  // ---------------------------------------------------
-  // NACHRICHT ANHEFTEN/LÖSEN (Owner/Admin)
-  // ---------------------------------------------------
   const pinMessage = async (messageId: string) => {
     if (!user?.id) throw new Error("Nicht eingeloggt.");
     if (!activeChannelId) throw new Error("Kein Channel aktiv.");
@@ -1234,10 +1086,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     await set(ref(db, `channelPins/${activeChannelId}/${messageId}`), null);
   };
 
-  // ---------------------------------------------------
-  // BEARBEITUNGS-HISTORIE EINER NACHRICHT LADEN + ENTSCHLÜSSELN — dieselbe
-  // epochId wie die aktuelle Fassung, editMessage ändert sie nie.
-  // ---------------------------------------------------
   const getMessageEditHistory = async (messageId: string): Promise<EditHistoryEntry[]> => {
     if (!activeChannelId) return [];
     const snap = await get(ref(db, `channelMessageEdits/${activeChannelId}/${messageId}`));
@@ -1262,11 +1110,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return entries.sort((a, b) => b.editedAt - a.editedAt);
   };
 
-  // ---------------------------------------------------
-  // TIPP-INDIKATOR AUSLÖSEN — höchstens alle 3s ein Schreibzugriff; der
-  // eigene Eintrag räumt sich selbst nach 5s auf (kein RTDB-TTL verfügbar)
-  // und zusätzlich sofort per onDisconnect bei Verbindungsabbruch.
-  // ---------------------------------------------------
   const notifyTyping = useCallback(() => {
     if (!user?.id || !activeChannelId) return;
     const now = Date.now();
@@ -1278,9 +1121,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     setTimeout(() => set(r, null).catch(() => {}), 5000);
   }, [user?.id, activeChannelId]);
 
-  // ---------------------------------------------------
-  // THREAD-ANTWORT LÖSCHEN (Soft-Delete/Tombstone)
-  // ---------------------------------------------------
   const deleteThreadReply = async (parentMessageId: string, replyId: string) => {
     if (!user?.id) throw new Error("Nicht eingeloggt.");
     if (!activeChannelId) throw new Error("Kein Channel aktiv.");
@@ -1300,9 +1140,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     );
   };
 
-  // ---------------------------------------------------
-  // REAKTION TOGGELN (ein aktiver Slot pro Nutzer/Nachricht)
-  // ---------------------------------------------------
   const toggleReaction = async (messageId: string, emoji: string) => {
     if (!user?.id || !activeChannelId) return;
 
@@ -1336,11 +1173,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  // ---------------------------------------------------
-  // UMFRAGE-STIMME ABGEBEN (ein aktiver Slot pro Nutzer/Nachricht, wie bei
-  // Reaktionen) — der Optionsindex selbst wird verschlüsselt gespeichert,
-  // damit auch bei Umfragen nirgends Klartext auf dem Server landet.
-  // ---------------------------------------------------
   const votePoll = async (messageId: string, optionIndex: number) => {
     if (!user?.id || !activeChannelId) return;
 
@@ -1364,9 +1196,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  // ---------------------------------------------------
-  // THREAD-ANTWORTEN
-  // ---------------------------------------------------
   const subscribeThread = useCallback(
     (parentMessageId: string): (() => void) => {
       if (!activeChannelId) return () => {};
@@ -1450,9 +1279,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     await fanOutMentions(rRef.key!, mentionedUids);
   };
 
-  // ---------------------------------------------------
-  // PERSON ZU CHANNEL EINLADEN (Annahme/Ablehnung: NotificationContext)
-  // ---------------------------------------------------
   const inviteToChannel = async (
     channelId: string,
     channelName: string,
@@ -1473,9 +1299,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // ---------------------------------------------------
-  // KANAL ALS EINGESCHRÄNKT MARKIEREN/AUFHEBEN (Owner/Admin)
-  // ---------------------------------------------------
   const setChannelRestricted = async (channelId: string, restricted: boolean) => {
     try {
       await update(ref(db, `channels/${channelId}`), { restricted });
@@ -1485,11 +1308,6 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // ---------------------------------------------------
-  // KANAL ALS ANKÜNDIGUNGS-KANAL MARKIEREN/AUFHEBEN (Owner/Admin) —
-  // unabhängig von "restricted": steuert WER SCHREIBEN darf (alle lesenden
-  // Mitglieder vs. nur Owner/Admin), nicht WER DEN KANAL SEHEN darf.
-  // ---------------------------------------------------
   const setChannelAnnouncementOnly = async (channelId: string, announcementOnly: boolean) => {
     try {
       await update(ref(db, `channels/${channelId}`), { announcementOnly });
@@ -1499,15 +1317,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // ---------------------------------------------------
-  // KANAL LÖSCHEN (Owner/Admin) — erst die Blätter (Nachrichten/Schlüssel),
-  // dann den Kanal selbst, in getrennten Aufrufen: channelKeys/-Epochs' Rule
-  // liest channels/{id}.serverId, das darf im selben Mehrfach-
-  // Schreibvorgang, in dem channels/{id} mitgelöscht würde, nicht schon weg
-  // sein (Cross-Path-Problem, siehe deleteServer in ServerContext.tsx).
-  // ---------------------------------------------------
   const deleteChannel = async (channelId: string) => {
     try {
+      // Erst die Blätter (Nachrichten/Schlüssel), dann den Kanal selbst, in
+      // getrennten Aufrufen: channelKeys/-Epochs' Rule liest
+      // channels/{id}.serverId, das darf im selben Mehrfach-Schreibvorgang,
+      // in dem channels/{id} mitgelöscht würde, nicht schon weg sein.
       await update(ref(db), {
         [`channelMessages/${channelId}`]: null,
         [`channelMessageReactions/${channelId}`]: null,

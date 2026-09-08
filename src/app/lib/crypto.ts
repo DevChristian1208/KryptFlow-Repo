@@ -1,10 +1,6 @@
 import { ref, get, set, update } from "firebase/database";
 import { db } from "@/app/lib/firebase";
 
-/* -----------------------------------------------------------
- * IndexedDB: lokaler, nicht-exportierbarer Schlüsselspeicher
- * ---------------------------------------------------------*/
-
 const IDB_NAME = "dabubble-keys";
 const IDB_STORE = "identityKeys";
 const IDB_RATCHET_STORE = "ratchetState";
@@ -16,14 +12,6 @@ type StoredIdentity = {
   ecdsaPrivateKey: CryptoKey;
   ecdsaPublicKey: CryptoKey;
 };
-
-// Wird ausschließlich beim Neu-Erzeugen eines Schlüsselpaars vergeben (siehe
-// ensureIdentityKeys) und zusammen mit dem Public Key veröffentlicht. Erlaubt
-// anderen Clients zu erkennen, dass ein zuvor für diesen Nutzer gewrapptes
-// Channel-Key-Envelope nicht mehr zum AKTUELLEN Schlüsselpaar passt (z. B.
-// nach einem Origin-/Geräte-Wechsel ohne Schlüssel-Backup, siehe
-// ensureIdentityKeys-Kommentar) und es neu wrappen müssen, statt den
-// Nutzer dauerhaft mit einem unentschlüsselbaren Envelope hängen zu lassen.
 
 function openIdb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -41,13 +29,6 @@ function openIdb(): Promise<IDBDatabase> {
   });
 }
 
-/**
- * Generischer Key-Value-Speicher für Ratchet-Zustand (wartende Ephemer-
- * Privatschlüssel, hergeleitete Perioden-Wurzeln, Ketten-Zustand,
- * Skipped-Message-Keys) — bewusst als ein Store mit präfixierten Schlüsseln
- * statt vieler einzelner Object-Stores, um die IDB-Migration einfach zu
- * halten.
- */
 async function ratchetGet<T>(key: string): Promise<T | undefined> {
   const dbi = await openIdb();
   return new Promise((resolve, reject) => {
@@ -78,8 +59,6 @@ async function ratchetDelete(key: string): Promise<void> {
   });
 }
 
-/** Alle Einträge, deren Schlüssel mit einem der gegebenen Präfixe beginnt —
- * für den Schlüssel-Backup-Snapshot (siehe exportIdentityBackup). */
 async function ratchetGetAllByPrefixes(
   prefixes: string[]
 ): Promise<{ key: string; value: unknown }[]> {
@@ -102,10 +81,9 @@ async function ratchetGetAllByPrefixes(
   });
 }
 
-/** Schreibt gesicherte Einträge zurück, ohne bereits lokal vorhandene (z. B.
- * durch normale Nutzung inzwischen weiter fortgeschrittene Chain-Zustände)
- * zu überschreiben — ein wiederhergestellter Snapshot darf frischeren
- * lokalen Zustand nie zurückdrehen. */
+// Überschreibt nie frischeren lokalen Zustand — ein wiederhergestellter
+// Snapshot darf bestehende, weiter fortgeschrittene Ratchet-Ketten nicht
+// zurückdrehen.
 async function ratchetPutManyIfAbsent(
   entries: { key: string; value: unknown }[]
 ): Promise<void> {
@@ -147,10 +125,6 @@ async function idbPut(identity: StoredIdentity): Promise<void> {
   });
 }
 
-/* -----------------------------------------------------------
- * Base64 <-> ArrayBuffer
- * ---------------------------------------------------------*/
-
 export function bufToBase64(buf: ArrayBuffer): string {
   let binary = "";
   const bytes = new Uint8Array(buf);
@@ -164,14 +138,6 @@ export function base64ToBuf(b64: string): ArrayBuffer {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes.buffer;
 }
-
-/* -----------------------------------------------------------
- * Datei-/Bild-Anhänge: eigener Einmal-Schlüssel pro Datei, der (base64) in
- * der ohnehin bereits verschlüsselten Nachricht mitgeschickt wird — dadurch
- * bleibt die Datei in Firebase Storage nur Ciphertext, unabhängig vom
- * Kanal-/DM-Ratchet-Zustand (kein Bezug zu Epochen/Perioden nötig, der
- * Schlüssel ist einmalig und ausschließlich für diese eine Datei gültig).
- * ---------------------------------------------------------*/
 
 export type EncryptedBlob = {
   ciphertext: Blob;
@@ -218,10 +184,6 @@ export async function decryptBlob(
   return new Blob([plaintext], { type: contentType });
 }
 
-/* -----------------------------------------------------------
- * Identität: Schlüsselpaare erzeugen / laden
- * ---------------------------------------------------------*/
-
 export type PublicIdentity = {
   ecdhPublicJwk: JsonWebKey;
   ecdsaPublicJwk: JsonWebKey;
@@ -229,13 +191,6 @@ export type PublicIdentity = {
 };
 
 async function generateIdentity(uid: string): Promise<StoredIdentity> {
-  // extractable: true (statt vorher false) ist eine bewusste Abschwächung,
-  // NUR um das optionale Schlüssel-Backup (siehe exportIdentityBackup unten)
-  // überhaupt zu ermöglichen — ohne exportierbare Keys ließe sich der
-  // private Schlüssel nie in ein Backup verpacken. Der zusätzliche Spielraum
-  // dadurch ist gering: eine erfolgreiche XSS-Lücke könnte ohnehin schon
-  // sämtliche gerade entschlüsselten Klartexte direkt aus dem DOM/State
-  // auslesen, unabhängig davon, ob der Schlüssel selbst exportierbar ist.
   const ecdhPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     true,
@@ -256,35 +211,20 @@ async function generateIdentity(uid: string): Promise<StoredIdentity> {
   };
 }
 
-// Schützt vor gleichzeitigen, doppelten Aufrufen für dieselbe uid (z. B.
-// durch React Strict Mode im Dev-Modus, das Effects bewusst doppelt
-// ausführt, oder mehrfaches Feuern von onAuthStateChanged). Ohne diese
+// Schützt vor gleichzeitigen, doppelten Aufrufen für dieselbe uid: ohne diese
 // Sperre könnten zwei parallele Aufrufe beide "noch keine Identität"
-// feststellen, JEDER unabhängig ein eigenes Schlüsselpaar erzeugen und
-// jeweils in IndexedDB bzw. Firebase schreiben — je nachdem, welcher Aufruf
-// wo zuletzt gewinnt, können lokal gespeicherter privater Schlüssel und
-// veröffentlichter öffentlicher Schlüssel danach dauerhaft NICHT mehr
-// zusammenpassen (Signaturen dieses Geräts würden nie mehr verifizieren,
-// obwohl alles frisch aussieht).
+// feststellen, JEDER unabhängig ein eigenes Schlüsselpaar erzeugen — lokal
+// gespeicherter privater Schlüssel und veröffentlichter öffentlicher
+// Schlüssel passen danach dauerhaft nicht mehr zusammen.
 const ensureIdentityKeysInFlight = new Map<string, Promise<void>>();
 
-/**
- * Stellt sicher, dass für `uid` ein lokales Schlüsselpaar existiert
- * (in IndexedDB) und dass die Public Keys unter `publicKeys/$uid` in
- * Firebase hinterlegt sind.
- */
 export function ensureIdentityKeys(uid: string): Promise<void> {
   const existing = ensureIdentityKeysInFlight.get(uid);
   if (existing) return existing;
 
-  // Die Map oben schützt nur innerhalb DIESES Tabs/Moduls — bei mehreren
-  // gleichzeitig offenen Tabs derselben Origin (z. B. zwei Fenster mit
-  // demselben eingeloggten Account) ist sie wirkungslos, weil jeder Tab
-  // seine eigene, unabhängige Map-Instanz hat. navigator.locks serialisiert
-  // dagegen ECHT über alle Tabs/Fenster derselben Origin hinweg (vom
-  // Browser selbst garantiert) und schließt damit genau die Lücke, die zu
-  // dauerhaft unpassenden lokalem Private-Key/veröffentlichtem Public-Key
-  // führen kann. Fallback ohne Lock für Browser ohne Web-Locks-Support.
+  // navigator.locks serialisiert zusätzlich ECHT über mehrere Tabs/Fenster
+  // derselben Origin hinweg (die Map oben schützt nur innerhalb dieses Tabs).
+  // Fallback ohne Lock für Browser ohne Web-Locks-Support.
   const withCrossTabLock: (fn: () => Promise<void>) => Promise<void> =
     typeof navigator !== "undefined" && "locks" in navigator
       ? (fn) => navigator.locks.request(`cryptflow-identity:${uid}`, fn)
@@ -299,19 +239,6 @@ export function ensureIdentityKeys(uid: string): Promise<void> {
       await idbPut(identity);
     }
 
-    // Nicht nur beim erstmaligen Erzeugen auf DIESEM Gerät hochladen,
-    // sondern auch dann erneut, wenn der Public Key remote fehlt, obwohl
-    // lokal schon eine Identität existiert — z. B. nach einem reinen
-    // Datenbank-Reset (Firebase-Daten gelöscht, Browser-Speicher aber
-    // nicht): ohne diese Prüfung bliebe der private Schlüssel lokal
-    // unverändert, aber niemand könnte je wieder Signaturen dieses Geräts
-    // verifizieren oder Channel-Keys für es wrappen, weil publicKeys/$uid
-    // dauerhaft leer bliebe. Ein neues Gerät ohne lokale Kopie der Schlüssel
-    // bekommt aus demselben Grund sonst nie einen zu seinem eigenen
-    // privaten Schlüssel passenden Public Key veröffentlicht. Bewusste
-    // Einschränkung statt Multi-Device-Sync: das zuletzt aktive Gerät
-    // gewinnt, ältere Geräte müssen sich neu identifizieren (passt zur
-    // Entscheidung "kein Schlüssel-Backup").
     const publishedExists = justGenerated
       ? false
       : (await get(ref(db, `publicKeys/${uid}`))).exists();
@@ -331,10 +258,6 @@ export function ensureIdentityKeys(uid: string): Promise<void> {
 
   ensureIdentityKeysInFlight.set(uid, run);
   run.finally(() => {
-    // Nach Abschluss aus der Map entfernen: idbGet(uid) liefert danach für
-    // JEDEN künftigen Aufruf ohnehin sofort die (jetzt garantiert
-    // vorhandene) lokale Identität zurück — der Eintrag würde sonst nur
-    // unnötig im Speicher bleiben, ohne noch einen Zweck zu erfüllen.
     ensureIdentityKeysInFlight.delete(uid);
   });
   return run;
@@ -349,17 +272,6 @@ async function getOwnIdentity(uid: string): Promise<StoredIdentity> {
   }
   return identity;
 }
-
-/* -----------------------------------------------------------
- * Optionales, passphrase-verschlüsseltes Schlüssel-Backup — rein client-
- * seitig: Firebase bekommt nie die Passphrase noch den Klartext-Schlüssel zu
- * sehen, nur den PBKDF2-Salt und das AES-GCM-Chiffrat. Ohne dieses Backup
- * gilt weiterhin "letztes Gerät gewinnt, alte Nachrichten unwiederbringlich
- * weg" (siehe ensureIdentityKeys) — mit Backup kann dieselbe Identität
- * (und damit der Zugriff auf alte, bereits gewrappte Channel-Keys sowie
- * laufende DM-Ratchet-Perioden) auf einem neuen Gerät wiederhergestellt
- * werden, wenn der Nutzer sich VORHER dafür entschieden hat, eins anzulegen.
- * ---------------------------------------------------------*/
 
 export type KeyBackup = {
   saltB64: string;
@@ -392,11 +304,6 @@ async function deriveBackupKey(
   );
 }
 
-/** Verschlüsselt die eigenen privaten Identitätsschlüssel mit einer vom
- * Nutzer gewählten Passphrase. Wirft, wenn die lokale Identität (noch) mit
- * extractable: false erzeugt wurde (Altbestand vor dieser Funktion) — in dem
- * Fall ist kein Export möglich, ohne die Identität komplett neu zu erzeugen
- * (was wiederum den bekannten "neues Gerät"-Reset auslösen würde). */
 export async function exportIdentityBackup(
   uid: string,
   passphrase: string
@@ -419,17 +326,9 @@ export async function exportIdentityBackup(
     );
   }
 
-  // Zusätzlich zu den Langzeit-Identitätsschlüsseln auch die bereits
-  // hergeleiteten DM-Ratchet-Perioden-Wurzeln ("root:…") und den
-  // persistenten Klartext-Cache ("pt:…") sichern — ohne das wäre eine
-  // einzelne Nachricht, deren Ratchet-Schlüssel nur lokal existierte, nach
-  // einem Storage-Reset/Geräte-Wechsel für immer verloren, selbst mit
-  // funktionierendem Identitäts-Backup (bewusste Priorität: garantiert
-  // lesbarer Verlauf schlägt strikte Per-Nachricht-Forward-Secrecy über
-  // Geräte hinweg). "pending:…"-Einträge (noch offene Ephemer-Schlüssel
-  // einer gerade erst begonnenen Periode) werden bewusst NICHT gesichert —
-  // sie sind CryptoKey-Objekte und lösen sich im Normalfall ohnehin
-  // innerhalb von Sekunden von selbst auf, sobald beide Seiten online sind.
+  // "pending:…"-Einträge (offene Ephemer-Schlüssel einer gerade erst
+  // begonnenen Periode) werden bewusst NICHT gesichert — CryptoKey-Objekte,
+  // lösen sich im Normalfall ohnehin innerhalb von Sekunden von selbst auf.
   const ratchetSnapshot = await ratchetGetAllByPrefixes(["root:", "pt:"]);
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -456,11 +355,6 @@ export async function exportIdentityBackup(
   return backup;
 }
 
-/** Stellt die Identität aus einem zuvor angelegten Backup wieder her und
- * ersetzt damit die evtl. auf diesem Gerät bereits vorhandene lokale
- * Identität. Bei falscher Passphrase schlägt die AES-GCM-Entschlüsselung
- * mit einem OperationError fehl (Authentifizierungs-Tag passt nicht) —
- * dasselbe Fehlerbild wie bei den anderen unwrap-Funktionen in dieser Datei. */
 export async function restoreIdentityBackup(
   uid: string,
   passphrase: string
@@ -493,12 +387,9 @@ export async function restoreIdentityBackup(
     ratchetSnapshot?: { key: string; value: unknown }[];
   };
 
-  // EC-Private-JWKs enthalten die öffentlichen Koordinaten (x/y) bereits mit
-  // — der Public Key lässt sich daraus ableiten, indem man dasselbe JWK ohne
-  // "d" (den privaten Skalar) als Public Key importiert, statt ihn separat
-  // mitspeichern zu müssen.
-  //
-  // WICHTIG, zwei Stolperfallen zugleich:
+  // WICHTIG, zwei Stolperfallen zugleich (Ursache eines vergangenen Bugs,
+  // bei dem restoreIdentityBackup() JEDES Mal fehlschlug und danach still
+  // eine komplett neue, unabhängige Identität erzeugt wurde):
   // 1) "d: undefined" per Objekt-Spread lässt "d" als EIGENE Property mit
   //    Wert undefined zurück ("d" in obj ist dann immer noch true) — die
   //    WebCrypto-JWK-Prüfung auf "ist ein privater Schlüssel vorhanden"
@@ -509,11 +400,6 @@ export async function restoreIdentityBackup(
   //    widerspricht dann jeder angeforderten Nutzung (z. B. "verify") und
   //    importKey() bricht mit "Key operations and usage mismatch" ab. Auch
   //    "key_ops" muss komplett entfernt werden statt auf [] gesetzt.
-  // Beide Fehler zusammen sorgten dafür, dass restoreIdentityBackup() JEDES
-  // Mal fehlschlug (mit try/catch verschluckt) und danach still eine
-  // komplett neue, unabhängige Identität erzeugt wurde — die eigentliche
-  // Ursache hinter den wiederkehrenden "Signatur ungültig"/"kein Schlüssel"-
-  // Problemen.
   const ecdhPublicJwk: JsonWebKey = { ...ecdhPrivateJwk };
   delete ecdhPublicJwk.d;
   delete ecdhPublicJwk.key_ops;
@@ -560,14 +446,6 @@ export async function restoreIdentityBackup(
   }
 }
 
-/** Holt nur den Ratchet-Snapshot (DM-Perioden-Wurzeln + Klartext-Cache) aus
- * einem bestehenden Backup und mischt ihn in den lokalen Ratchet-Speicher —
- * ohne die Identitätsschlüssel anzurühren. Läuft bei JEDEM Login (nicht nur
- * bei fehlender lokaler Identität), damit auf einem Gerät verlorene, aber
- * über ein anderes Gerät zwischenzeitlich gesicherte Perioden-Wurzeln auch
- * dann nachgeliefert werden, wenn die lokale Identität selbst noch intakt
- * ist. Best-effort: kein Backup vorhanden oder falsches Passwort bricht den
- * Login nicht ab. */
 export async function mergeRatchetBackupSnapshot(
   uid: string,
   passphrase: string
@@ -604,42 +482,11 @@ export async function hasLocalIdentity(uid: string): Promise<boolean> {
   return !!(await idbGet(uid));
 }
 
-/**
- * Erkennt genau das Szenario, das zu den wiederkehrenden "Kein Schlüssel"-
- * Meldungen nach längerer Pause führt: der Browser hat lokale Website-Daten
- * (IndexedDB, damit auch den privaten Schlüssel) wegen Inaktivität geräumt
- * (Safari macht das nach 7 Tagen garantiert, Chrome unter Speicherdruck
- * ähnlich), obwohl ein Schlüssel-Backup existiert, mit dem sich das
- * eigentlich vermeiden ließe. Wird VOR ensureIdentityKeys aufgerufen, damit
- * der Nutzer die Wahl bekommt, statt dass stillschweigend eine neue,
- * unabhängige Identität erzeugt wird (die alle bisherigen Nachrichten
- * dieses Geräts dauerhaft unlesbar macht).
- */
 export async function needsIdentityRecoveryPrompt(uid: string): Promise<boolean> {
   if (await hasLocalIdentity(uid)) return false;
   return hasKeyBackup(uid);
 }
 
-/**
- * Veröffentlicht den Public Key der AKTUELL lokal gespeicherten Identität
- * neu — nötig direkt nach restoreIdentityBackup(), weil ensureIdentityKeys()
- * einen bereits vorhandenen (aber inzwischen zu einer anderen, zwischen-
- * zeitlich frisch erzeugten Identität gehörenden) publicKeys-Eintrag sonst
- * fälschlich als "schon aktuell" durchgehen lässt, statt ihn durch den
- * gerade wiederhergestellten zu ersetzen.
- */
-/**
- * Stellt sicher, dass eine lokale Identität existiert (stellt sie bei Bedarf
- * aus dem automatischen, mit dem Login-Passwort verschlüsselten Backup
- * wieder her, statt stillschweigend eine neue zu erzeugen) UND aktualisiert
- * danach das Backup mit dem gerade verwendeten Passwort — deckt sowohl den
- * Wiederherstellungsfall als auch die allererste Erzeugung (frisches Konto,
- * neues Gerät ohne Backup) ab, damit ab sofort IMMER ein aktuelles Backup
- * existiert. Nur direkt nach einem echten Login/einer Registrierung
- * aufrufbar, wenn das Klartext-Passwort kurz zur Verfügung steht (siehe
- * pendingLoginPassword.ts) — ein reiner Sitzungs-Reload hat kein Passwort
- * und fällt auf den interaktiven Wiederherstellungs-Dialog zurück.
- */
 export async function ensureIdentityAndAutoBackup(
   uid: string,
   password: string
@@ -649,19 +496,12 @@ export async function ensureIdentityAndAutoBackup(
       await restoreIdentityBackup(uid, password);
       await republishOwnPublicKey(uid);
     } catch (e) {
-      // Kein Backup vorhanden, oder das Passwort hat sich seither geändert
-      // (Backup dann nicht mehr entschlüsselbar) — ensureIdentityKeys()
-      // erzeugt unten wie gewohnt eine frische Identität.
       console.warn(
         "[crypto] Automatische Wiederherstellung nicht möglich, erzeuge neue Identität:",
         e
       );
     }
   } else {
-    // Lokale Identität ist intakt, evtl. fehlen aber einzelne DM-Perioden-
-    // Wurzeln, die nur auf einem anderen Gerät hergeleitet wurden — die
-    // Sicherung ergänzt hier nur (siehe ratchetPutManyIfAbsent), sie
-    // überschreibt nie frischeren lokalen Zustand.
     await mergeRatchetBackupSnapshot(uid, password);
   }
 
@@ -683,10 +523,6 @@ export async function republishOwnPublicKey(uid: string): Promise<void> {
   invalidatePublicKeyCache(uid);
 }
 
-/* -----------------------------------------------------------
- * Public Keys anderer Nutzer laden (mit Cache)
- * ---------------------------------------------------------*/
-
 const PUBLIC_KEY_CACHE_TTL_MS = 60_000;
 
 const publicKeyCache = new Map<
@@ -697,17 +533,17 @@ const publicKeyCache = new Map<
   }
 >();
 
+// TTL statt für immer gültigem Cache: ändert sich die Identität eines
+// Nutzers zwischenzeitlich, würde ein unbegrenzt gültiger Cache hier
+// weiterhin den ALTEN öffentlichen Schlüssel liefern — Signaturen und neue
+// Envelope-Wraps würden dann gegen den falschen Schlüssel geprüft/erzeugt,
+// obwohl der Absender tatsächlich korrekt mit seiner aktuellen Identität
+// signiert/verschlüsselt hat. Das war die Ursache mehrerer "Signatur
+// ungültig"-Vorfälle.
 export function fetchPublicIdentity(
   uid: string,
   opts?: { bypassCache?: boolean }
 ): Promise<{ ecdh: CryptoKey; ecdsa: CryptoKey; keyVersion?: string } | null> {
-  // TTL statt für immer gültigem Cache: ändert sich die Identität eines
-  // Nutzers zwischenzeitlich (neues Gerät/Origin, siehe ensureIdentityKeys),
-  // würde ein für die Dauer der Seiten-Session unbegrenzt gültiger Cache
-  // hier weiterhin den ALTEN öffentlichen Schlüssel liefern — Signaturen
-  // und neue Envelope-Wraps würden dann gegen den falschen Schlüssel
-  // geprüft/erzeugt, obwohl der Absender gerade tatsächlich korrekt mit
-  // seiner aktuellen Identität signiert/verschlüsselt hat.
   const cached = opts?.bypassCache ? undefined : publicKeyCache.get(uid);
   if (cached && Date.now() - cached.fetchedAt < PUBLIC_KEY_CACHE_TTL_MS) {
     return cached.promise;
@@ -752,26 +588,15 @@ export function fetchPublicIdentity(
   return promise;
 }
 
-/**
- * Muss direkt nach JEDEM eigenen Publish nach publicKeys/{uid} aufgerufen
- * werden (ensureIdentityKeys, republishOwnPublicKey) — sonst könnte
- * ausgerechnet der eigene Client innerhalb des 60s-TTL-Fensters oben noch
- * den alten, alten Public Key aus dem Cache benutzen, um z. B. einen
- * Channel-Key-Umschlag für sich selbst zu wrappen oder eine Signatur zu
- * prüfen — mit dem gerade veröffentlichten NEUEN privaten Schlüssel würde
- * das dann fehlschlagen ("Signatur ungültig", "Kein Schlüssel verfügbar"),
- * obwohl alles gerade eben korrekt aktualisiert wurde.
- */
+// Muss direkt nach JEDEM eigenen Publish nach publicKeys/{uid} aufgerufen
+// werden — sonst könnte der eigene Client innerhalb des TTL-Fensters noch
+// den alten Public Key aus dem Cache benutzen, um z. B. einen Channel-Key
+// für sich selbst zu wrappen oder eine Signatur zu prüfen, was dann mit dem
+// gerade veröffentlichten NEUEN privaten Schlüssel fehlschlägt.
 export function invalidatePublicKeyCache(uid: string): void {
   publicKeyCache.delete(uid);
 }
 
-/**
- * Aktuelle Public-Key-Version eines Nutzers (siehe StoredIdentity-Kommentar
- * zu keyVersion) — dient dem Erkennen veralteter Channel-Key-Envelopes in
- * ensureUserInAllChannels, ohne dafür extra Firebase-Reads zu brauchen
- * (nutzt denselben Cache wie fetchPublicIdentity).
- */
 export async function getPublicKeyVersion(
   uid: string,
   opts?: { bypassCache?: boolean }
@@ -779,10 +604,6 @@ export async function getPublicKeyVersion(
   const identity = await fetchPublicIdentity(uid, opts);
   return identity?.keyVersion;
 }
-
-/* -----------------------------------------------------------
- * AES-GCM Verschlüsselung von Nachrichtentext
- * ---------------------------------------------------------*/
 
 export type EncryptedPayload = { ciphertext: string; iv: string };
 
@@ -812,10 +633,6 @@ export async function decryptText(
   return new TextDecoder().decode(plainBuf);
 }
 
-/* -----------------------------------------------------------
- * Signieren / Verifizieren (Integrität)
- * ---------------------------------------------------------*/
-
 export async function signText(uid: string, text: string): Promise<string> {
   const identity = await getOwnIdentity(uid);
   const sig = await crypto.subtle.sign(
@@ -843,28 +660,9 @@ export async function verifyText(
   }
 }
 
-/* -----------------------------------------------------------
- * Forward Secrecy für Channels: Perioden-Rekeying (fester Zeit-Bucket
- * statt Pro-Nachricht-Ratchet — für Gruppen bewusst einfacher gehalten,
- * ein echter Ratchet bräuchte ein eigenes Sender-Key-Schema).
- * ---------------------------------------------------------*/
-
-/**
- * Liefert eine für beide Gesprächspartner unabhängig berechenbare
- * Epochen-ID (fester Zeit-Bucket) — kein Koordinations-Overhead nötig.
- */
 export function epochIdForTimestamp(durationMs: number, at: number = Date.now()): string {
   return String(Math.floor(at / durationMs));
 }
-
-/* -----------------------------------------------------------
- * DMs (Legacy/Bootstrap): statisch abgeleiteter Schlüssel.
- * Dient als Fallback für Alt-Nachrichten ohne `periodId` UND als
- * Übergangs-Schlüssel für die allererste(n) Nachricht(en) einer neuen
- * Konversation, bevor die erste Ratchet-Periode (siehe unten) etabliert
- * ist — kein Sonderfall im Code nötig, weil Nachrichten ohne `periodId`
- * ohnehin einheitlich über diesen Pfad entschlüsselt werden.
- * ---------------------------------------------------------*/
 
 export async function deriveDmKey(
   uid: string,
@@ -883,13 +681,6 @@ export async function deriveDmKey(
   );
 }
 
-/* -----------------------------------------------------------
- * DMs: Symmetrischer Hash-Ratchet pro Nachricht + opportunistisches
- * periodisches DH-Rekeying (echte Forward Secrecy + Post-Compromise-
- * Security, vereinfacht gegenüber einem vollen Signal-Double-Ratchet —
- * siehe Plan-Kontext).
- * ---------------------------------------------------------*/
-
 const DM_MAX_MESSAGES_PER_PERIOD = 50;
 const DM_MAX_SKIPPED_KEYS = 50;
 
@@ -904,11 +695,6 @@ async function generateEphemeralKeyPair(): Promise<{
   privateKey: CryptoKey;
   publicJwk: JsonWebKey;
 }> {
-  // extractable: true gilt für das ganze Paar (Web Crypto kennt kein
-  // getrenntes Flag pro Hälfte) — hier bewusst in Kauf genommen, da dieser
-  // Schlüssel nur transient existiert (in IndexedDB nur bis zum Abschluss
-  // des DH-Austauschs, danach sofort gelöscht) und nicht der langfristige
-  // Identitäts-Schlüssel ist.
   const pair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     true,
@@ -953,10 +739,6 @@ async function hmac(keyBytes: Uint8Array, context: number): Promise<Uint8Array> 
   return new Uint8Array(sig);
 }
 
-/** Ein Ratchet-Schritt: liefert den Message-Key für den aktuellen
- * Kettenschritt sowie den nächsten Kettenschlüssel. Der alte Kettenschlüssel
- * wird vom Aufrufer verworfen (Einweg-Funktion — daraus folgt Forward
- * Secrecy). */
 async function ratchetStep(
   chainKeyBytes: Uint8Array
 ): Promise<{ messageKeyBytes: Uint8Array; nextChainKeyBytes: Uint8Array }> {
@@ -981,16 +763,8 @@ function convIdFromIds(a: string, b: string): string {
 
 type ChainState = { chainKeyBytes: number[]; nextSeq: number };
 
-/** Trennt die geteilte Ratchet-Wurzel einer DM-Periode in drei unabhängige
- * Ketten auf, damit Hauptnachrichten, Thread-Antworten und Reaktionen sich
- * nicht denselben `seq`-Zähler teilen (sonst könnten z. B. eine Nachricht
- * und eine kurz danach gesendete Reaktion denselben Message-Key erhalten). */
 export type MsgCategory = "msg" | "thread" | "reaction";
 
-/** Serialisiert konkurrierende Aufrufe für denselben Ketten-Zustand
- * (`getSendMessageKey`/`getReceiveMessageKey`), damit zwei nahezu
- * gleichzeitige Aufrufe nicht denselben `nextSeq` lesen und denselben
- * Message-Key doppelt vergeben. */
 const chainLocks = new Map<string, Promise<unknown>>();
 function withChainLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
   const prior = chainLocks.get(lockKey) ?? Promise.resolve();
@@ -1005,26 +779,12 @@ function withChainLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/**
- * Stellt sicher, dass für die Konversation eine nutzbare Ratchet-Periode
- * existiert, und liefert deren Wurzel-Bytes. Opportunistisch: blockiert
- * nicht, falls die Gegenseite gerade nicht reagiert hat — liefert dann
- * `null`, der Aufrufer fällt in dem Fall auf `deriveDmKey` zurück.
- */
 export async function ensureDmPeriodRoot(
   myUid: string,
   otherUid: string
 ): Promise<{ periodId: string; rootBytes: Uint8Array } | null> {
   const convId = convIdFromIds(myUid, otherUid);
 
-  // Ohne Sperre könnten zwei nahezu gleichzeitige Aufrufe (z. B. eine
-  // Nachricht senden und kurz danach reagieren) beide feststellen, dass
-  // keine nutzbare Periode existiert, und dann JEDER eine eigene neue
-  // Periode mit potenziell identischer, `Date.now()`-basierter ID
-  // anstoßen und sich dabei gegenseitig den `dmSessions`-Eintrag und den
-  // lokal gecachten Ephemer-Schlüssel überschreiben — die am Ende
-  // gecachte Wurzel passt dann nicht mehr zu dem, was die Gegenseite
-  // tatsächlich vereinbart hat, und die Periode wird dauerhaft unlesbar.
   return withChainLock(`ensure:${convId}`, async () => {
     const hintSnap = await get(ref(db, `dmThreads/${myUid}/${otherUid}/currentPeriodId`));
     const hintedPeriodId = hintSnap.val() as string | null;
@@ -1040,12 +800,10 @@ export async function ensureDmPeriodRoot(
         if (!state || state.nextSeq < DM_MAX_MESSAGES_PER_PERIOD) {
           return { periodId: hintedPeriodId, rootBytes: root };
         }
-        usable = { periodId: hintedPeriodId, rootBytes: root }; // stale, aber nutzbar als Fallback
+        usable = { periodId: hintedPeriodId, rootBytes: root };
       }
     }
 
-    // Aktuelle Periode fehlt, ist unvollständig oder zu alt -> neue anstoßen,
-    // dabei aber nicht auf die Gegenseite warten.
     const newPeriodId = String(Date.now());
     const eph = await generateEphemeralKeyPair();
     await ratchetPut(`pending:${convId}:${newPeriodId}`, eph.privateKey);
@@ -1061,17 +819,10 @@ export async function ensureDmPeriodRoot(
     const maybeCompleted = await tryCompletePeriod(convId, newPeriodId, myUid, otherUid);
     if (maybeCompleted) return { periodId: newPeriodId, rootBytes: maybeCompleted };
 
-    return usable; // stale-aber-nutzbar, oder null (dann: deriveDmKey-Fallback)
+    return usable;
   });
 }
 
-/**
- * Wurzel-Bytes für eine KONKRETE, bereits bekannte Periode (z. B. aus dem
- * `periodId`-Feld einer eintreffenden Nachricht) — im Gegensatz zu
- * `ensureDmPeriodRoot` wird hier NIE eine neue Periode angestoßen, nur eine
- * bereits laufende ggf. vervollständigt (falls man selbst die eingeladene
- * Gegenseite ist). Für das Entschlüsseln eintreffender Nachrichten gedacht.
- */
 export async function getPeriodRoot(
   myUid: string,
   otherUid: string,
@@ -1086,13 +837,6 @@ async function tryCompletePeriod(
   myUid: string,
   otherUid: string
 ): Promise<Uint8Array | null> {
-  // Eigene Sperre pro (convId, periodId): wird sowohl aus `ensureDmPeriodRoot`
-  // (bereits per convId gesperrt) als auch unabhängig davon aus `getPeriodRoot`
-  // beim Entschlüsseln eintreffender Nachrichten aufgerufen — mehrere
-  // Nachrichten derselben, noch nicht abgeschlossenen Periode werden beim
-  // Laden typischerweise per `Promise.all` parallel entschlüsselt, was ohne
-  // diese Sperre zu genau demselben Überschreiben-Problem führen kann wie
-  // in `ensureDmPeriodRoot` beschrieben.
   return withChainLock(`period:${convId}:${periodId}`, async () => {
     const cached = await ratchetGet<number[]>(`root:${convId}:${periodId}`);
     if (cached) return new Uint8Array(cached);
@@ -1100,8 +844,6 @@ async function tryCompletePeriod(
     const snap = await get(ref(db, `dmSessions/${convId}/${periodId}`));
     const val = snap.val() as Record<string, { ephemeralPublicJwk: JsonWebKey }> | null;
 
-    // Ich bin die Gegenseite und wurde gerade erst eingeladen -> meinen
-    // eigenen Ephemer-Schlüssel jetzt nachliefern.
     if (val?.[otherUid] && !val?.[myUid]) {
       const eph = await generateEphemeralKeyPair();
       await ratchetPut(`pending:${convId}:${periodId}`, eph.privateKey);
@@ -1128,13 +870,6 @@ async function tryCompletePeriod(
   });
 }
 
-/** Nächsten Message-Key für eine EIGENE ausgehende Nachricht in dieser
- * Periode/Epoche (schreibt den fortgeschrittenen Kettenzustand persistent
- * zurück). `scopeId` ist der Geltungsbereich der Ratchet-Kette — bei DMs die
- * `convId` (beide Teilnehmer), bei Channels die `channelId` (alle
- * Mitglieder) — und `senderUid` die eigene UID (man leitet immer nur die
- * eigene Sende-Kette ab). Generisch genug, um von DMs UND Channels benutzt
- * zu werden, statt zwei parallele Ratchet-Implementierungen zu pflegen. */
 export async function getSendMessageKey(
   scopeId: string,
   senderUid: string,
@@ -1162,14 +897,10 @@ export async function getSendMessageKey(
       nextSeq: seq + 1,
     });
 
-    // Eigene ausgehende Nachrichten laufen beim Anzeigen trotzdem durch den
-    // normalen Entschlüsselungspfad (kein optimistisches lokales Echo) — die
-    // Sendekette hat den Schlüssel für diesen `seq` aber bereits verbraucht
-    // und vergessen (das ist der Sinn von Forward Secrecy). Deshalb hier
-    // zusätzlich im selben "Skipped-Key"-Cache ablegen, den
-    // getReceiveMessageKey ohnehin zuerst prüft — so kann man die eigene
-    // gerade gesendete Nachricht noch einmal lesen, ohne die Ratchet-
-    // Garantien für alle anderen (vergangenen) Nachrichten aufzuweichen.
+    // Auch im Skipped-Key-Cache ablegen (denselben, den getReceiveMessageKey
+    // zuerst prüft), damit man die eigene gerade gesendete Nachricht beim
+    // Rendern noch einmal lesen kann, ohne die Forward-Secrecy-Garantien für
+    // alle anderen Nachrichten aufzuweichen.
     await ratchetPut(
       `skip:${scopeId}:${periodId}:${senderUid}:${category}:${seq}`,
       Array.from(messageKeyBytes)
@@ -1179,10 +910,6 @@ export async function getSendMessageKey(
   });
 }
 
-/** Message-Key für eine EMPFANGENE Nachricht von `senderUid` bei
- * gegebenem `seq` — spult die mitverfolgte Kette bei Bedarf vor und
- * cached dabei übersprungene Schlüssel für später eintreffende, ältere
- * Nachrichten. Gleiches `scopeId`-Prinzip wie `getSendMessageKey`. */
 export async function getReceiveMessageKey(
   scopeId: string,
   senderUid: string,
@@ -1209,8 +936,8 @@ export async function getReceiveMessageKey(
       };
     }
 
-    if (seq < state.nextSeq) return null; // bereits verbraucht/verworfen, nicht mehr rekonstruierbar
-    if (seq - state.nextSeq > DM_MAX_SKIPPED_KEYS) return null; // Sprung zu groß, bewusste Grenze
+    if (seq < state.nextSeq) return null;
+    if (seq - state.nextSeq > DM_MAX_SKIPPED_KEYS) return null;
 
     let chainKeyBytes: Uint8Array = new Uint8Array(state.chainKeyBytes);
     let nextSeq = state.nextSeq;
@@ -1234,15 +961,6 @@ export async function getReceiveMessageKey(
     return resultKeyBytes ? importMessageKey(resultKeyBytes) : null;
   });
 }
-
-/* -----------------------------------------------------------
- * Persistenter Klartext-Cache für geratchete DM-Nachrichten/Reaktionen:
- * jeder Message-Key wird nach Gebrauch verworfen (Forward Secrecy), die App
- * entschlüsselt aber bei jedem Firebase-Snapshot die komplette Liste neu —
- * ohne diesen Cache würde jede bereits gelesene Nachricht beim nächsten
- * Rendern dauerhaft unlesbar werden. Läuft über denselben generischen
- * `ratchetState`-Store, nur mit eigenem Namensraum.
- * ---------------------------------------------------------*/
 
 export type CachedPlaintext = { text: string; verified?: boolean };
 
@@ -1268,11 +986,6 @@ async function chain0For(
   senderUid: string,
   category: MsgCategory
 ): Promise<Uint8Array> {
-  // Eigener HMAC-Schritt mit Sender-UID + Kategorie als Kontext: Sender-UID
-  // sorgt dafür, dass A->B und B->A trotz gemeinsamer Wurzel unterschiedliche
-  // Ketten ergeben (ohne vorherige Rollenaushandlung), die Kategorie sorgt
-  // zusätzlich dafür, dass Hauptnachrichten, Thread-Antworten und Reaktionen
-  // unabhängige Ketten benutzen statt sich einen `seq`-Zähler zu teilen.
   const key = await hmacKeyFrom(rootBytes);
   const sig = await crypto.subtle.sign(
     "HMAC",
@@ -1281,10 +994,6 @@ async function chain0For(
   );
   return new Uint8Array(sig);
 }
-
-/* -----------------------------------------------------------
- * Channels: Envelope-Encryption eines gemeinsamen Channel-Keys
- * ---------------------------------------------------------*/
 
 export type ChannelKeyEnvelope = {
   ephemeralPublicJwk: JsonWebKey;
@@ -1300,7 +1009,6 @@ export async function generateChannelKey(): Promise<CryptoKey> {
   ]);
 }
 
-/** Verpackt einen Channel-Key für ein bestimmtes Mitglied (ECIES-artig). */
 export async function wrapChannelKeyForMember(
   channelKey: CryptoKey,
   memberUid: string,
@@ -1344,7 +1052,6 @@ export async function wrapChannelKeyForMember(
   };
 }
 
-/** Entpackt einen Channel-Key mit dem eigenen privaten ECDH-Key. */
 export async function unwrapChannelKey(
   uid: string,
   envelope: ChannelKeyEnvelope
@@ -1380,15 +1087,6 @@ export async function unwrapChannelKey(
 
 export type SelfEncrypted = EncryptedPayload & { keyEnvelope: ChannelKeyEnvelope };
 
-/**
- * Verschlüsselt Text für sich selbst (z. B. gespeicherte Nachrichten) —
- * behandelt den eigenen Account wie einen Ein-Personen-Channel: frischer
- * AES-Key pro Eintrag, per ECIES für die eigene Identität gewrappt. So
- * bleibt der bestehende Grundsatz gewahrt, dass niemals Klartext-
- * Nachrichteninhalt in Firebase landet, unabhängig davon, dass die Regeln
- * den Zugriff ohnehin schon auf den Besitzer beschränken — Firebase selbst
- * (der Betreiber) darf den Inhalt trotzdem nie sehen können.
- */
 export async function encryptForSelf(
   uid: string,
   plaintext: string
