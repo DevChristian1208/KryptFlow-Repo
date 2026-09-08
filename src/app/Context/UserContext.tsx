@@ -42,12 +42,23 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [recoveryUid, setRecoveryUid] = useState<string | null>(null);
   const recoveryResolveRef = useRef<(() => void) | null>(null);
+  // Firebase kann onAuthStateChanged bei EINEM Login mehrfach kurz
+  // hintereinander auslösen (z. B. initialer Zustand + Token-Refresh kurz
+  // nach dem Sign-in). Ohne Absicherung würde ein zweites, praktisch
+  // gleichzeitiges Auslösen das (Einmal-)Passwort bereits verbraucht
+  // vorfinden, während die erste Wiederherstellung noch läuft — hält die
+  // lokale Identität dann fälschlich für fehlend und kann eine zweite,
+  // unabhängige (neue) Identität anstoßen. Dieser Ref sorgt dafür, dass die
+  // Einrichtung pro uid nur einmal läuft; weitere Auslösungen warten auf
+  // dieselbe laufende Zusage, statt eigenständig zu entscheiden.
+  const identitySetupRef = useRef<Map<string, Promise<void>>>(new Map());
 
   useEffect(() => {
     const unsub = onAuthStateChanged(
       auth,
       async (authUser: FirebaseUser | null) => {
         if (!authUser) {
+          identitySetupRef.current.clear();
           setUser(null);
           setLoading(false);
           return;
@@ -63,18 +74,25 @@ export function UserProvider({ children }: { children: ReactNode }) {
           // gehalten. Ein reiner Sitzungs-Reload hat kein Passwort zur
           // Verfügung — dafür der interaktive Dialog als Fallback, falls
           // genau dann lokale Schlüssel fehlen sollten.
-          const pendingPassword = consumePendingLoginPassword();
-          if (pendingPassword) {
-            await ensureIdentityAndAutoBackup(authUser.uid, pendingPassword);
-          } else {
-            if (await needsIdentityRecoveryPrompt(authUser.uid)) {
-              await new Promise<void>((resolve) => {
-                setRecoveryUid(authUser.uid);
-                recoveryResolveRef.current = resolve;
-              });
-            }
-            await ensureIdentityKeys(authUser.uid);
+          let setupPromise = identitySetupRef.current.get(authUser.uid);
+          if (!setupPromise) {
+            setupPromise = (async () => {
+              const pendingPassword = consumePendingLoginPassword();
+              if (pendingPassword) {
+                await ensureIdentityAndAutoBackup(authUser.uid, pendingPassword);
+              } else {
+                if (await needsIdentityRecoveryPrompt(authUser.uid)) {
+                  await new Promise<void>((resolve) => {
+                    setRecoveryUid(authUser.uid);
+                    recoveryResolveRef.current = resolve;
+                  });
+                }
+                await ensureIdentityKeys(authUser.uid);
+              }
+            })();
+            identitySetupRef.current.set(authUser.uid, setupPromise);
           }
+          await setupPromise;
           // Best-effort, kein await nötig (blockiert das Laden des Nutzers
           // nicht) — legt den HomeServer beim Login des designierten
           // Owner-Accounts einmalig an, falls er noch nicht existiert.
