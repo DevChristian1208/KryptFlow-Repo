@@ -50,8 +50,6 @@ export default function NewsBotSetupModal({
     if (!activeServerId || running) return;
     setRunning(true);
     try {
-      // 1) Bot-Schlüsselpaar erzeugen (gleiche Parameter wie normale
-      // Identitäten, siehe crypto.ts generateIdentity).
       const ecdhPair = await crypto.subtle.generateKey(
         { name: "ECDH", namedCurve: "P-256" },
         true,
@@ -68,10 +66,9 @@ export default function NewsBotSetupModal({
       const ecdsaPrivateJwk = await crypto.subtle.exportKey("jwk", ecdsaPair.privateKey);
       const keyVersion = crypto.randomUUID();
 
-      // 2) Bot-Account über eine SEPARATE Firebase-App-Instanz anlegen —
-      // sonst würde createUserWithEmailAndPassword die eigene, gerade
-      // aktive Admin-Sitzung im Browser durch die neue Bot-Sitzung
-      // ersetzen.
+      // SEPARATE Firebase-App-Instanz nötig — sonst würde
+      // createUserWithEmailAndPassword die eigene, aktive Admin-Sitzung im
+      // Browser durch die neue Bot-Sitzung ersetzen.
       const email = `newsbot+${Date.now()}@cryptflow.internal`;
       const password = randomPassword();
       const secondaryApp = initializeApp(
@@ -112,19 +109,15 @@ export default function NewsBotSetupModal({
         await deleteApp(secondaryApp).catch(() => {});
       }
 
-      // 3) Auf der eigenen (Admin-)Sitzung: #news-Channel anlegen, falls
-      // nicht schon vorhanden, dann den Bot als Admin-Mitglied hinzufügen
-      // — der bestehende Selbstheilungs-Mechanismus (ensureUserInAllChannels,
-      // läuft automatisch bei jeder Änderung an serverMembers) liefert dem
-      // Bot daraufhin von selbst einen Channel-Key-Umschlag.
+      // ensureUserInAllChannels (läuft automatisch bei jeder Änderung an
+      // serverMembers) liefert dem Bot von selbst einen Channel-Key-Umschlag,
+      // sobald er unten als Mitglied eingetragen ist.
       let channelId = channels.find((c) => c.name === "news" && c.serverId === activeServerId)
         ?.id;
       if (!channelId) {
         await createChannel("news", "Automatische Tech-News (News-Bot)", false, {
           announcementOnly: true,
         });
-        // createChannel liefert die neue ID nicht direkt zurück (setzt nur
-        // activeChannelId) — kurz aus der DB nachlesen, um sicherzugehen.
         const chansSnap = await get(ref(db, "channels"));
         const chans =
           (chansSnap.val() as Record<string, { name?: string; serverId?: string }> | null) ||

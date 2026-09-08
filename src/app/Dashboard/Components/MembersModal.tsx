@@ -98,8 +98,6 @@ export default function MembersModal({
       await inviteToChannel(channelId, channelName, candidate.id);
       setInvited((prev) => new Set(prev).add(candidate.id));
       showToast(`Einladung an ${candidate.name} gesendet.`, "success");
-      // Zusätzlich zur Glocken-Benachrichtigung eine Karte im DM-Chat mit
-      // dem Eingeladenen hinterlassen (auf Wunsch des Nutzers).
       sendDirectSystemMessage(candidate.id, "channelInvite", {
         channelId,
         channelName,
@@ -112,13 +110,9 @@ export default function MembersModal({
   };
 
   const filtered = useMemo(() => {
-    //Wenn das Suchfeld geschlossen ist-> gibt leere Liste zurück
     if (!isOpen) return [];
-    //User Eingabe(query) bereinigen
     const q = query.trim().toLowerCase();
-    //Wenn kein Suchtext vorhanden ist -> Zeig alle Mitglieder
     if (!q) return members;
-    //Filtere anhand von Name und Email
     return members.filter((m) => {
       const name = m.name?.toLowerCase() ?? "";
       const mail = m.email?.toLowerCase() ?? "";

@@ -5,9 +5,6 @@ import Image from "next/image";
 
 type Meta = { title?: string; description?: string; image?: string; siteName?: string };
 
-// Modulweiter Cache statt pro Komponente: dieselbe URL taucht oft in
-// mehreren Nachrichten/Renders auf, ein erneuter Server-Roundtrip pro
-// Vorkommen wäre unnötig.
 const cache = new Map<string, Promise<Meta | null>>();
 
 function fetchMeta(url: string): Promise<Meta | null> {

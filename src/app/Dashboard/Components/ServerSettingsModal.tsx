@@ -152,7 +152,6 @@ export default function ServerSettingsModal({
     return () => window.removeEventListener("keydown", handler);
   }, [isOpen, onClose]);
 
-  // Mitglieder live laden + Profile auflösen
   useEffect(() => {
     if (!isOpen) return;
     const r = ref(db, `serverMembers/${server.id}`);
@@ -196,7 +195,6 @@ export default function ServerSettingsModal({
     return () => off(r, "value", unsub);
   }, [isOpen, server.id, user]);
 
-  // Gebannte Nutzer live laden — nur relevant/lesbar für Owner/Admin.
   useEffect(() => {
     if (!isOpen || !isAdmin) {
       setBannedUsers([]);
@@ -220,8 +218,6 @@ export default function ServerSettingsModal({
     return () => off(r, "value", unsub);
   }, [isOpen, isAdmin, server.id]);
 
-  // Person zum Server einladen: Suche nach Benutzername, ausgenommen bereits
-  // vorhandene Mitglieder.
   useEffect(() => {
     const cleaned = inviteTerm.trim().toLowerCase();
     if (!cleaned) {
@@ -282,7 +278,6 @@ export default function ServerSettingsModal({
     }
   };
 
-  // Einladungen live laden (nur die dieses Servers)
   useEffect(() => {
     if (!isOpen || tab !== "invites") return;
     const r = ref(db, "serverInvites");

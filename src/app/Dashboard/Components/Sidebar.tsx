@@ -42,8 +42,6 @@ export default function Sidebar({
   const [dmsOpen, setDmsOpen] = useState(true);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
 
-  // Breite der Kanal-/DM-Spalte per Ziehgriff einstellbar, wird pro Browser
-  // gemerkt (localStorage) — die Server-Rail selbst hat eine feste Breite.
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const resizingRef = useRef(false);
   const startXRef = useRef(0);

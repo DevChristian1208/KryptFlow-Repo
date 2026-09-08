@@ -16,10 +16,6 @@ type Props = {
   onCancel: () => void;
 };
 
-/**
- * Ersatz für window.confirm() — natives Browser-Dialogfenster passt weder
- * optisch zum Rest der App noch lässt es sich stylen/übersetzen konsistent.
- */
 export default function ConfirmDialog({
   isOpen,
   title,

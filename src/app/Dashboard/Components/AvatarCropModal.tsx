@@ -13,13 +13,6 @@ type Props = {
   onCropped: (blob: Blob) => void;
 };
 
-/**
- * Einfaches, abhängigkeitsfreies Zuschneide-Werkzeug für Profilbilder: das
- * Bild wird per "cover"-Basisskalierung immer formatfüllend dargestellt
- * (nie kleiner als der Ausschnitt), Zoom nur nach oben, Verschieben per
- * Ziehen — bewusst kein volles Bildbearbeitungs-Tool, nur genug für einen
- * runden Avatar-Ausschnitt.
- */
 export default function AvatarCropModal({ file, onCancel, onCropped }: Props) {
   const [mounted, setMounted] = useState(false);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
