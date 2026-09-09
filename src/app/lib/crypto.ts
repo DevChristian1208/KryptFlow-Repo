@@ -487,6 +487,18 @@ export async function needsIdentityRecoveryPrompt(uid: string): Promise<boolean>
   return hasKeyBackup(uid);
 }
 
+async function localIdentityMatchesPublished(uid: string): Promise<boolean> {
+  const identity = await idbGet(uid);
+  if (!identity) return false;
+  const published = await fetchPublicIdentity(uid, { bypassCache: true });
+  if (!published) return false;
+  const [localJwk, publishedJwk] = await Promise.all([
+    crypto.subtle.exportKey("jwk", identity.ecdsaPublicKey),
+    crypto.subtle.exportKey("jwk", published.ecdsa),
+  ]);
+  return localJwk.x === publishedJwk.x && localJwk.y === publishedJwk.y;
+}
+
 export async function ensureIdentityAndAutoBackup(
   uid: string,
   password: string
@@ -503,6 +515,34 @@ export async function ensureIdentityAndAutoBackup(
     }
   } else {
     await mergeRatchetBackupSnapshot(uid, password);
+
+    // Selbstheilung gegen genau das Muster, das die wiederkehrenden
+    // "Signatur ungültig"/"Kein Schlüssel"-Vorfälle verursacht hat: eine
+    // lokale Identität kann vorhanden, aber (z. B. durch einen früher
+    // fehlgeschlagenen restoreIdentityBackup-Versuch in einer anderen
+    // Sitzung) NICHT mehr dieselbe sein wie die veröffentlichte — bislang
+    // prüfte ensureIdentityKeys() unten nur "existiert lokal etwas" und
+    // "existiert veröffentlicht etwas", nie ob beide zusammenpassen. Ohne
+    // diesen Abgleich signiert/entschlüsselt das Gerät für immer mit dem
+    // falschen Schlüssel, ohne dass es je auffällt. Erst mit dem gerade
+    // eingegebenen Passwort das (vermutlich aktuellere) Backup wiederholen;
+    // passt das Ergebnis danach immer noch nicht zur veröffentlichten
+    // Identität, gilt dieses Gerät als Quelle der Wahrheit.
+    if (!(await localIdentityMatchesPublished(uid))) {
+      let healed = false;
+      try {
+        await restoreIdentityBackup(uid, password);
+        healed = await localIdentityMatchesPublished(uid);
+      } catch (e) {
+        console.warn(
+          "[crypto] Identitäts-Abgleich: Wiederherstellung aus Backup fehlgeschlagen:",
+          e
+        );
+      }
+      if (!healed) {
+        await republishOwnPublicKey(uid);
+      }
+    }
   }
 
   await ensureIdentityKeys(uid);
