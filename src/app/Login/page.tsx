@@ -357,33 +357,6 @@ export default function Login() {
                   </Link>
                 </div>
 
-                <div className="flex items-center justify-center gap-2">
-                  <div className="h-px bg-[var(--border-subtle)] w-full" />
-                  <span className="text-sm text-[var(--foreground-secondary)]">
-                    ODER
-                  </span>
-                  <div className="h-px bg-[var(--border-subtle)] w-full" />
-                </div>
-
-                <button
-                  type="button"
-                  className="btn-secondary w-full"
-                  onClick={() =>
-                    showToast(
-                      "Google-Login ist noch nicht implementiert.",
-                      "info",
-                    )
-                  }
-                >
-                  <Image
-                    src="/Google.png"
-                    alt="Google"
-                    width={20}
-                    height={20}
-                  />
-                  <span>Anmelden mit Google</span>
-                </button>
-
                 <div className="flex justify-center gap-2">
                   <button
                     type="submit"
