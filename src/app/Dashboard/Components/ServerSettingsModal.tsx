@@ -954,7 +954,7 @@ export default function ServerSettingsModal({
                     </label>
                     <label
                       className="flex items-center gap-2 text-xs text-[var(--foreground-secondary)] cursor-pointer"
-                      title="Gast-Accounts dürfen hier schreiben (sonst nur registrierte Mitglieder)"
+                      title="Gast-Accounts dürfen hier schreiben (sonst nur registrierte Mitglieder). Achtung: Dieser Channel ist dann NICHT mehr Ende-zu-Ende-verschlüsselt, da Gast-Konten jederzeit neu entstehen und eine verlässliche Schlüsselverteilung ohne Server-Beteiligung nicht möglich ist."
                     >
                       <input
                         type="checkbox"
@@ -962,7 +962,7 @@ export default function ServerSettingsModal({
                         onChange={(e) => setChannelGuestsAllowed(c.id, e.target.checked)}
                         className="accent-[var(--accent)]"
                       />
-                      Gäste dürfen schreiben
+                      Gäste dürfen schreiben (nicht verschlüsselt)
                     </label>
                     <button
                       type="button"
@@ -998,7 +998,7 @@ export default function ServerSettingsModal({
                   <span className="text-xs text-[var(--foreground-secondary)] shrink-0">
                     {c.restricted ? "Eingeschränkt" : "Offen"}
                     {c.announcementOnly ? " · nur Admins schreiben" : ""}
-                    {c.guestsAllowed ? " · Gäste dürfen schreiben" : ""}
+                    {c.guestsAllowed ? " · Gäste dürfen schreiben (nicht verschlüsselt)" : ""}
                   </span>
                 )}
               </div>

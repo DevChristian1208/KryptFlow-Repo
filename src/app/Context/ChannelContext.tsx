@@ -71,16 +71,20 @@ type ChannelMessageDb = {
   user?: { name?: string; email?: string; avatar?: string };
 };
 
-type ReactionDb = EncryptedPayload & {
-  signature: string;
+type ReactionDb = Partial<EncryptedPayload> & {
+  signature?: string;
   createdAt: number;
   epochId?: string;
+  /** Klartext-Reaktion (Gäste-Channel, nicht verschlüsselt) */
+  emoji?: string;
 };
 
-type PollVoteDb = EncryptedPayload & {
-  signature: string;
+type PollVoteDb = Partial<EncryptedPayload> & {
+  signature?: string;
   createdAt: number;
   epochId?: string;
+  /** Klartext-Stimme (Gäste-Channel, nicht verschlüsselt) */
+  optionIndex?: number;
 };
 
 export type Channel = {
@@ -203,15 +207,35 @@ async function decodeMessage(
   }
 
   if (!m.ciphertext && m.text) {
+    // Klartext-Nachricht (Gäste-Channel, bewusst nicht Ende-zu-Ende-
+    // verschlüsselt) oder echte Legacy-Alt-Nachricht ohne senderUid.
+    // Signatur bleibt zur Herkunfts-Prüfung erhalten, auch ohne Verschlüsselung.
+    let verified: boolean | undefined;
+    if (m.signature && m.senderUid) {
+      const senderIdentity = await fetchPublicIdentity(m.senderUid);
+      verified = senderIdentity
+        ? await verifyText(senderIdentity.ecdsa, m.text, m.signature)
+        : false;
+    }
+    const profile = m.senderUid
+      ? await resolveProfile(m.senderUid)
+      : {
+          name: m.user?.name || "Unbekannt",
+          email: m.user?.email || "",
+          avatar: m.user?.avatar || "/avatar1.png",
+        };
     return {
       id,
-      text: m.text,
+      text:
+        verified === false
+          ? `⚠️ Signatur ungültig – Nachricht könnte manipuliert sein: ${m.text}`
+          : m.text,
       createdAt: m.createdAt || 0,
-      user: {
-        name: m.user?.name || "Unbekannt",
-        email: m.user?.email || "",
-        avatar: m.user?.avatar || "/avatar1.png",
-      },
+      user: profile,
+      senderUid: m.senderUid,
+      verified,
+      edited: m.edited,
+      editedAt: m.editedAt,
     };
   }
 
@@ -845,10 +869,20 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         (async () => {
           const grouped = new Map<string, string[]>();
           for (const [uid, entry] of Object.entries(raw)) {
+            if (entry.emoji) {
+              const arr = grouped.get(entry.emoji) || [];
+              arr.push(uid);
+              grouped.set(entry.emoji, arr);
+              continue;
+            }
+            if (!entry.ciphertext || !entry.iv) continue;
             const channelKey = await resolveChannelKey(activeChannelId, entry.epochId);
             if (!channelKey) continue;
             try {
-              const emoji = await decryptText(channelKey, entry);
+              const emoji = await decryptText(channelKey, {
+                ciphertext: entry.ciphertext,
+                iv: entry.iv,
+              });
               const arr = grouped.get(emoji) || [];
               arr.push(uid);
               grouped.set(emoji, arr);
@@ -889,10 +923,18 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         (async () => {
           const votes: Record<string, number> = {};
           for (const [uid, entry] of Object.entries(raw)) {
+            if (entry.optionIndex !== undefined) {
+              votes[uid] = entry.optionIndex;
+              continue;
+            }
+            if (!entry.ciphertext || !entry.iv) continue;
             const channelKey = await resolveChannelKey(activeChannelId, entry.epochId);
             if (!channelKey) continue;
             try {
-              const text = await decryptText(channelKey, entry);
+              const text = await decryptText(channelKey, {
+                ciphertext: entry.ciphertext,
+                iv: entry.iv,
+              });
               const idx = Number(text);
               if (Number.isInteger(idx)) votes[uid] = idx;
             } catch {
@@ -1025,35 +1067,53 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const msg = text.trim();
     if (!msg) return;
 
-    const epoch = await getCurrentChannelEpochKey(activeChannelId);
-    if (!epoch) {
-      throw new Error(
-        "Kein Verschlüsselungs-Schlüssel für diesen Channel verfügbar. Bitte kurz warten, bis ihn ein anderes Mitglied bereitgestellt hat."
-      );
-    }
-    // Wer selbst erfolgreich schreiben kann, hat zwangsläufig gerade eine
-    // aktive Verbindung — genau der Moment, den sonst niemand garantiert
-    // mitbekommt. Im Hintergrund gleich mit nachliefern, was neuen/anderen
-    // Mitgliedern noch an Schlüssel-Umschlägen fehlt, statt darauf zu
-    // hoffen, dass irgendwann zufällig ein privilegierter Client online ist.
-    ensureUserInAllChannels();
-
-    const { ciphertext, iv } = await encryptText(epoch.key, msg);
-    const signature = await signText(user.id, ciphertext);
-
     const msgRef = push(ref(db, `channelMessages/${activeChannelId}`));
     const createdAt = Date.now();
+    let payload: Record<string, unknown>;
+
+    if (activeChannel?.guestsAllowed) {
+      // Gäste-Channels sind bewusst NICHT Ende-zu-Ende-verschlüsselt: Gast-
+      // Konten entstehen jederzeit neu, eine verlässliche Schlüsselverteilung
+      // ohne Server-Beteiligung ist strukturell nicht möglich (siehe
+      // Diskussion zur "Warte auf Schlüssel"-Problematik). Die Signatur
+      // bleibt trotzdem, um die Urheberschaft prüfbar zu machen.
+      const signature = await signText(user.id, msg);
+      payload = {
+        text: msg,
+        senderUid: user.id,
+        signature,
+        createdAt,
+        user: { name: user.name, email: user.email, avatar: user.avatar },
+      };
+    } else {
+      const epoch = await getCurrentChannelEpochKey(activeChannelId);
+      if (!epoch) {
+        throw new Error(
+          "Kein Verschlüsselungs-Schlüssel für diesen Channel verfügbar. Bitte kurz warten, bis ihn ein anderes Mitglied bereitgestellt hat."
+        );
+      }
+      // Wer selbst erfolgreich schreiben kann, hat zwangsläufig gerade eine
+      // aktive Verbindung — genau der Moment, den sonst niemand garantiert
+      // mitbekommt. Im Hintergrund gleich mit nachliefern, was neuen/anderen
+      // Mitgliedern noch an Schlüssel-Umschlägen fehlt, statt darauf zu
+      // hoffen, dass irgendwann zufällig ein privilegierter Client online ist.
+      ensureUserInAllChannels();
+
+      const { ciphertext, iv } = await encryptText(epoch.key, msg);
+      const signature = await signText(user.id, ciphertext);
+      payload = {
+        ciphertext,
+        iv,
+        senderUid: user.id,
+        signature,
+        createdAt,
+        epochId: epoch.epochId,
+      };
+    }
 
     try {
       await update(ref(db), {
-        [`channelMessages/${activeChannelId}/${msgRef.key}`]: {
-          ciphertext,
-          iv,
-          senderUid: user.id,
-          signature,
-          createdAt,
-          epochId: epoch.epochId,
-        },
+        [`channelMessages/${activeChannelId}/${msgRef.key}`]: payload,
         [`rateLimits/${user.id}/lastMessageAt`]: createdAt,
       });
     } catch (e) {
@@ -1071,22 +1131,44 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const text = newText.trim();
     if (!text) return;
 
-    // Mit demselben Schlüssel neu verschlüsseln, mit dem die Nachricht
-    // ursprünglich stand — ihr gespeichertes epochId-Feld bleibt beim
-    // Bearbeiten unverändert.
-    const existing = messages.find((m) => m.id === messageId);
-    const channelKey = await resolveChannelKey(activeChannelId, existing?.epochId);
-    if (!channelKey) throw new Error("Kein Verschlüsselungs-Schlüssel verfügbar.");
-
-    const { ciphertext, iv } = await encryptText(channelKey, text);
-    const signature = await signText(user.id, ciphertext);
-
     // Alte Fassung vor dem Überschreiben als Historien-Eintrag sichern,
     // eigener Aufruf statt im selben Mehrfach-Schreibvorgang: der
     // Historien-Pfad ist write-once, ein Fehlschlag dabei soll die
     // eigentliche Bearbeitung nicht blockieren.
     const rawSnap = await get(ref(db, `channelMessages/${activeChannelId}/${messageId}`));
     const raw = rawSnap.val() as ChannelMessageDb | null;
+
+    if (raw && !raw.ciphertext) {
+      // Klartext-Nachricht (Gäste-Channel) — keine Verschlüsselung nötig.
+      if (raw.text) {
+        const editRef = push(ref(db, `channelMessageEdits/${activeChannelId}/${messageId}`));
+        await set(editRef, {
+          text: raw.text,
+          senderUid: user.id,
+          editedAt: Date.now(),
+        }).catch((e) =>
+          console.error("[ChannelContext] Bearbeitungs-Historie konnte nicht gespeichert werden:", e)
+        );
+      }
+      const signature = await signText(user.id, text);
+      await update(ref(db, `channelMessages/${activeChannelId}/${messageId}`), {
+        text,
+        signature,
+        edited: true,
+        editedAt: Date.now(),
+      });
+      return;
+    }
+
+    // Mit demselben Schlüssel neu verschlüsseln, mit dem die Nachricht
+    // ursprünglich stand — ihr gespeichertes epochId-Feld bleibt beim
+    // Bearbeiten unverändert.
+    const channelKey = await resolveChannelKey(activeChannelId, raw?.epochId);
+    if (!channelKey) throw new Error("Kein Verschlüsselungs-Schlüssel verfügbar.");
+
+    const { ciphertext, iv } = await encryptText(channelKey, text);
+    const signature = await signText(user.id, ciphertext);
+
     if (raw?.ciphertext && raw.iv && raw.signature) {
       const editRef = push(ref(db, `channelMessageEdits/${activeChannelId}/${messageId}`));
       await set(editRef, {
@@ -1116,6 +1198,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     await update(ref(db, `channelMessages/${activeChannelId}/${messageId}`), {
       ciphertext: null,
       iv: null,
+      text: null,
       signature: null,
       deleted: true,
       deletedAt: Date.now(),
@@ -1142,15 +1225,16 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const raw =
       (snap.val() as Record<
         string,
-        { ciphertext: string; iv: string; editedAt: number }
+        { ciphertext?: string; iv?: string; text?: string; editedAt: number }
       > | null) || {};
     const msg = messages.find((m) => m.id === messageId);
     const key = await resolveChannelKey(activeChannelId, msg?.epochId);
     const entries = await Promise.all(
       Object.entries(raw).map(async ([id, v]) => {
+        if (!v.ciphertext) return { id, text: v.text || "", editedAt: v.editedAt };
         if (!key) return { id, text: "🔒", editedAt: v.editedAt };
         try {
-          const text = await decryptText(key, { ciphertext: v.ciphertext, iv: v.iv });
+          const text = await decryptText(key, { ciphertext: v.ciphertext, iv: v.iv! });
           return { id, text, editedAt: v.editedAt };
         } catch {
           return { id, text: "🔒 Nicht entschlüsselbar", editedAt: v.editedAt };
@@ -1183,6 +1267,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       {
         ciphertext: null,
         iv: null,
+        text: null,
         signature: null,
         deleted: true,
         deletedAt: Date.now(),
@@ -1200,6 +1285,11 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
 
     if (myCurrent?.emoji === emoji) {
       await set(ref(db, path), null);
+      return;
+    }
+
+    if (activeChannel?.guestsAllowed) {
+      await set(ref(db, path), { emoji, createdAt: Date.now() });
       return;
     }
 
@@ -1226,6 +1316,14 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
 
   const votePoll = async (messageId: string, optionIndex: number) => {
     if (!user?.id || !activeChannelId) return;
+
+    if (activeChannel?.guestsAllowed) {
+      await set(ref(db, `channelPollVotes/${activeChannelId}/${messageId}/${user.id}`), {
+        optionIndex,
+        createdAt: Date.now(),
+      });
+      return;
+    }
 
     const epoch = await getCurrentChannelEpochKey(activeChannelId);
     if (!epoch) {
@@ -1298,30 +1396,43 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     const msg = text.trim();
     if (!msg) return;
 
-    const epoch = await getCurrentChannelEpochKey(activeChannelId);
-    if (!epoch) {
-      throw new Error("Kein Verschlüsselungs-Schlüssel für diesen Channel verfügbar.");
-    }
-    ensureUserInAllChannels();
-
-    const { ciphertext, iv } = await encryptText(epoch.key, msg);
-    const signature = await signText(user.id, ciphertext);
-
     const rRef = push(
       ref(db, `channelThreadReplies/${activeChannelId}/${parentMessageId}`)
     );
     const createdAt = Date.now();
+    let payload: Record<string, unknown>;
+
+    if (activeChannel?.guestsAllowed) {
+      const signature = await signText(user.id, msg);
+      payload = {
+        text: msg,
+        senderUid: user.id,
+        signature,
+        createdAt,
+        user: { name: user.name, email: user.email, avatar: user.avatar },
+      };
+    } else {
+      const epoch = await getCurrentChannelEpochKey(activeChannelId);
+      if (!epoch) {
+        throw new Error("Kein Verschlüsselungs-Schlüssel für diesen Channel verfügbar.");
+      }
+      ensureUserInAllChannels();
+
+      const { ciphertext, iv } = await encryptText(epoch.key, msg);
+      const signature = await signText(user.id, ciphertext);
+      payload = {
+        ciphertext,
+        iv,
+        senderUid: user.id,
+        signature,
+        createdAt,
+        epochId: epoch.epochId,
+      };
+    }
 
     try {
       await update(ref(db), {
-        [`channelThreadReplies/${activeChannelId}/${parentMessageId}/${rRef.key}`]: {
-          ciphertext,
-          iv,
-          senderUid: user.id,
-          signature,
-          createdAt,
-          epochId: epoch.epochId,
-        },
+        [`channelThreadReplies/${activeChannelId}/${parentMessageId}/${rRef.key}`]: payload,
         [`rateLimits/${user.id}/lastMessageAt`]: createdAt,
       });
     } catch (e) {

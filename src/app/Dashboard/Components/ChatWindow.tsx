@@ -13,12 +13,24 @@ import { useProfileDialog } from "@/app/Context/ProfileDialogContext";
 import MembersModal from "./MembersModal";
 import MessageList from "./MessageList";
 import MessageComposer from "./MessageComposer";
-import { Lock, Hash, Users, Search, X } from "lucide-react";
+import { Lock, LockOpen, Hash, Users, Search, X } from "lucide-react";
 
-function EncryptionBadge({ detail }: { detail: string }) {
+function EncryptionBadge({
+  detail,
+  encrypted = true,
+}: {
+  detail: string;
+  encrypted?: boolean;
+}) {
   return (
-    <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[color-mix(in_srgb,var(--success)_12%,transparent)] text-[var(--success)] text-xs font-medium">
-      <Lock size={12} />
+    <div
+      className={`mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
+        encrypted
+          ? "bg-[color-mix(in_srgb,var(--success)_12%,transparent)] text-[var(--success)]"
+          : "bg-[var(--border-subtle)] text-[var(--foreground-secondary)]"
+      }`}
+    >
+      {encrypted ? <Lock size={12} /> : <LockOpen size={12} />}
       {detail}
     </div>
   );
@@ -385,7 +397,14 @@ export default function ChatWindow() {
                 <p className="text-sm text-[var(--foreground-secondary)] mt-1 max-w-md">
                   Willkommen! Das ist der Anfang von #{activeChannel.name}.
                 </p>
-                <EncryptionBadge detail="Ende-zu-Ende-verschlüsselt · AES-256-GCM" />
+                {activeChannel.guestsAllowed ? (
+                  <EncryptionBadge
+                    detail="Nicht verschlüsselt · für Gäste geöffnet"
+                    encrypted={false}
+                  />
+                ) : (
+                  <EncryptionBadge detail="Ende-zu-Ende-verschlüsselt · AES-256-GCM" />
+                )}
               </div>
 
               <MessageList
