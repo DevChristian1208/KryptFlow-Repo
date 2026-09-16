@@ -9,6 +9,20 @@ function validateImage(file: File): void {
   if (!file.type.startsWith("image/")) {
     throw new ImageValidationError("Bitte eine Bilddatei auswählen.");
   }
+  // HEIC/HEIF (Standardformat der Fotos-App auf iPhone/Mac) lässt sich zwar
+  // problemlos hochladen, aber Chrome/Firefox können es in einem <img>-Tag
+  // nicht decodieren — das Bild würde danach dauerhaft als "nicht ladbar"
+  // erscheinen. Deshalb hier schon vor dem Upload ablehnen statt erst beim
+  // gescheiterten Anzeigen.
+  if (
+    file.type === "image/heic" ||
+    file.type === "image/heif" ||
+    /\.(heic|heif)$/i.test(file.name)
+  ) {
+    throw new ImageValidationError(
+      "HEIC/HEIF-Bilder werden von Browsern nicht unterstützt. Bitte als JPG oder PNG exportieren."
+    );
+  }
   if (file.size > MAX_IMAGE_SIZE_BYTES) {
     throw new ImageValidationError(
       `Datei zu groß (max. ${MAX_IMAGE_SIZE_BYTES / (1024 * 1024)} MB).`

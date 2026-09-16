@@ -108,6 +108,17 @@ body {
     color: var(--foreground-secondary);
   }
 
+  /* Browser-Autofill (Chrome/Safari) malt sonst einen eigenen, per CSS
+     nicht überschreibbaren Hintergrund über das Feld — der "graue" Look. */
+  .input-pill input:-webkit-autofill,
+  .input-pill input:-webkit-autofill:hover,
+  .input-pill input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--foreground);
+    -webkit-box-shadow: 0 0 0px 1000px var(--surface-elevated) inset;
+    box-shadow: 0 0 0px 1000px var(--surface-elevated) inset;
+    transition: background-color 9999s ease-in-out 0s;
+  }
+
   .btn-primary {
     display: inline-flex;
     align-items: center;

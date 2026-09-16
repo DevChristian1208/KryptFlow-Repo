@@ -228,14 +228,16 @@ export default function Sidebar({
                   <span className="font-bold text-[16px]">Channels</span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowModal(true)}
-                  className="btn-icon w-7 h-7"
-                  aria-label="Channel hinzufügen"
-                >
-                  <Plus size={18} />
-                </button>
+                {!user?.isGuest && (
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(true)}
+                    className="btn-icon w-7 h-7"
+                    aria-label="Channel hinzufügen"
+                  >
+                    <Plus size={18} />
+                  </button>
+                )}
               </div>
 
               <ul
@@ -272,16 +274,18 @@ export default function Sidebar({
                   );
                 })}
 
-                <li>
-                  <button
-                    type="button"
-                    className="text-[var(--foreground)] text-sm px-1 flex items-center gap-2 cursor-pointer hover:underline"
-                    onClick={() => setShowModal(true)}
-                  >
-                    <Plus size={16} className="text-[var(--foreground-secondary)]" />
-                    Channel hinzufügen
-                  </button>
-                </li>
+                {!user?.isGuest && (
+                  <li>
+                    <button
+                      type="button"
+                      className="text-[var(--foreground)] text-sm px-1 flex items-center gap-2 cursor-pointer hover:underline"
+                      onClick={() => setShowModal(true)}
+                    >
+                      <Plus size={16} className="text-[var(--foreground-secondary)]" />
+                      Channel hinzufügen
+                    </button>
+                  </li>
+                )}
               </ul>
 
               {/* FREUNDE (nur für echte Nutzer sichtbar) */}

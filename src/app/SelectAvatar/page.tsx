@@ -188,10 +188,10 @@ export default function SelectAvatar() {
               <button
                 key={index}
                 onClick={() => setAvatarUrl(src)}
-                className={`w-10 h-10 rounded-full border-2 transition ${
+                className={`w-10 h-10 rounded-full transition ${
                   avatarUrl === src
-                    ? "border-[var(--accent)]"
-                    : "border-transparent"
+                    ? "ring-2 ring-[var(--accent)]"
+                    : "ring-2 ring-transparent"
                 }`}
               >
                 <Image
