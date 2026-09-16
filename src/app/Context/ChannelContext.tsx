@@ -757,6 +757,31 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, [activeChannelId, user?.id]);
 
+  const [myKeyReadyTick, setMyKeyReadyTick] = useState(0);
+
+  // Trifft der eigene Schlüssel-Umschlag für den aktiven Channel erst NACH
+  // dem ersten Entschlüsselungsversuch ein (z. B. ein frisch registrierter
+  // Gast, dem der Umschlag erst kurz danach von einem anderen Client
+  // nachgeliefert wird), gab es bisher keinen Auslöser für einen erneuten
+  // Versuch — Nachrichten blieben dauerhaft auf "Warte auf
+  // Verschlüsselungs-Schlüssel" stehen, bis man zufällig den Channel
+  // wechselte. Dieser Listener erzwingt bei Änderungen an genau diesem
+  // eigenen Umschlag einen Neuversuch.
+  useEffect(() => {
+    if (!activeChannelId || !user?.id) return;
+    const epochId = epochIdForTimestamp(CHANNEL_EPOCH_DURATION_MS);
+    const unsubs = [
+      onValue(ref(db, `channelKeys/${activeChannelId}/${user.id}`), () =>
+        setMyKeyReadyTick((t) => t + 1)
+      ),
+      onValue(
+        ref(db, `channelKeyEpochs/${activeChannelId}/${epochId}/${user.id}`),
+        () => setMyKeyReadyTick((t) => t + 1)
+      ),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, [activeChannelId, user?.id]);
+
   useEffect(() => {
     setMessages([]);
     if (!activeChannelId || !user?.id) return;
@@ -786,7 +811,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     });
 
     return () => unsub();
-  }, [activeChannelId, user?.id, resolveChannelKey, resolveProfile]);
+  }, [activeChannelId, user?.id, resolveChannelKey, resolveProfile, myKeyReadyTick]);
 
   useEffect(() => {
     Object.values(reactionUnsubs.current).forEach((fn) => fn());
