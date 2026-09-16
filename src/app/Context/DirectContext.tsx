@@ -892,6 +892,7 @@ export function DirectProvider({ children }: { children: ReactNode }) {
           [`dmThreads/${otherUserId}/${user.id}/otherName`]: user.name,
           [`dmThreads/${otherUserId}/${user.id}/otherAvatar`]: user.avatar || "/avatar1.png",
           [`dmThreads/${otherUserId}/${user.id}/lastMessageAt`]: now,
+          [`rateLimits/${user.id}/lastMessageAt`]: now,
         });
       } catch (e) {
         console.error("[DirectContext] sendDirectSystemMessage fehlgeschlagen:", e);

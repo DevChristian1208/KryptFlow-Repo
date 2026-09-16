@@ -78,7 +78,8 @@
           ".validate": "newData.val() <= now && (!data.exists() || newData.val() > data.val() + 5000)"
         },
         "$action": {
-          ".write": "auth != null && auth.uid === $uid"
+          ".write": "auth != null && auth.uid === $uid",
+          ".validate": "newData.val() <= now && (!data.exists() || newData.val() > data.val() + ($action === 'createServer' ? 30000 : $action === 'createInvite' ? 5000 : $action === 'joinServer' ? 3000 : 1000))"
         }
       }
     },
@@ -123,7 +124,8 @@
         ".read": "auth != null",
         ".write": "auth != null && ((!data.exists() && newData.child('createdByUid').val() === auth.uid && (root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(newData.child('serverId').val()).child(auth.uid).child('role').val() === 'admin') && (!root.child('rateLimits').child(auth.uid).child('createInvite').exists() || now - root.child('rateLimits').child(auth.uid).child('createInvite').val() > 5000)) || (data.exists() && (data.child('createdByUid').val() === auth.uid || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(data.child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
         "useCount": {
-          ".write": "auth != null"
+          ".write": "auth != null && root.child('serverMembers').child(root.child('serverInvites').child($inviteCode).child('serverId').val()).child(auth.uid).exists()",
+          ".validate": "newData.isNumber() && newData.val() === (data.exists() ? data.val() : 0) + 1"
         }
       }
     },
@@ -238,7 +240,7 @@
         ".read": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists()))",
         ".write": "auth != null && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')",
         "$mid": {
-          ".write": "auth != null && (((root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())) && ((!data.exists() && (root.child('channels').child($channelId).child('announcementOnly').val() !== true || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin') && (root.child('newusers').child(auth.uid).child('isGuest').val() !== true || root.child('channels').child($channelId).child('guestsAllowed').val() === true)) || (data.exists() && data.child('senderUid').val() === auth.uid))) || (data.exists() && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+          ".write": "auth != null && (((root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())) && ((!data.exists() && (root.child('channels').child($channelId).child('announcementOnly').val() !== true || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin') && (root.child('newusers').child(auth.uid).child('isGuest').val() !== true || root.child('channels').child($channelId).child('guestsAllowed').val() === true) && root.child('rateLimits').child(auth.uid).child('lastMessageAt').val() > now - 2000) || (data.exists() && data.child('senderUid').val() === auth.uid))) || (data.exists() && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
           ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (root.child('channels').child($channelId).child('guestsAllowed').val() === true && newData.hasChildren(['text', 'senderUid', 'signature', 'createdAt'])) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
         }
       }
@@ -276,7 +278,7 @@
         "$parentId": {
           ".read": "auth != null && (root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists()))",
           "$rid": {
-            ".write": "auth != null && (((root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())) && ((!data.exists() && (root.child('channels').child($channelId).child('announcementOnly').val() !== true || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin') && (root.child('newusers').child(auth.uid).child('isGuest').val() !== true || root.child('channels').child($channelId).child('guestsAllowed').val() === true)) || (data.exists() && data.child('senderUid').val() === auth.uid))) || (data.exists() && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
+            ".write": "auth != null && (((root.child('channels').child($channelId).child('members').child(auth.uid).exists() || (root.child('channels').child($channelId).child('restricted').val() !== true && root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).exists())) && ((!data.exists() && (root.child('channels').child($channelId).child('announcementOnly').val() !== true || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin') && (root.child('newusers').child(auth.uid).child('isGuest').val() !== true || root.child('channels').child($channelId).child('guestsAllowed').val() === true) && root.child('rateLimits').child(auth.uid).child('lastMessageAt').val() > now - 2000) || (data.exists() && data.child('senderUid').val() === auth.uid))) || (data.exists() && !newData.exists() && (root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child(root.child('channels').child($channelId).child('serverId').val()).child(auth.uid).child('role').val() === 'admin')))",
             ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (root.child('channels').child($channelId).child('guestsAllowed').val() === true && newData.hasChildren(['text', 'senderUid', 'signature', 'createdAt'])) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
           }
         }
@@ -344,7 +346,7 @@
       "$convId": {
         ".read": "auth != null && $convId.contains(auth.uid)",
         "$mid": {
-          ".write": "auth != null && $convId.contains(auth.uid) && (!data.exists() || data.child('senderUid').val() === auth.uid)",
+          ".write": "auth != null && $convId.contains(auth.uid) && ((!data.exists() && root.child('rateLimits').child(auth.uid).child('lastMessageAt').val() > now - 2000) || data.child('senderUid').val() === auth.uid)",
           ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
         }
       }
@@ -367,7 +369,7 @@
         "$parentId": {
           ".read": "auth != null && $convId.contains(auth.uid)",
           "$rid": {
-            ".write": "auth != null && $convId.contains(auth.uid) && (!data.exists() || data.child('senderUid').val() === auth.uid)",
+            ".write": "auth != null && $convId.contains(auth.uid) && ((!data.exists() && root.child('rateLimits').child(auth.uid).child('lastMessageAt').val() > now - 2000) || data.child('senderUid').val() === auth.uid)",
             ".validate": "(newData.hasChildren(['ciphertext', 'iv', 'senderUid', 'signature', 'createdAt']) || (newData.hasChildren(['senderUid', 'deleted', 'deletedAt']) && newData.child('deleted').val() === true)) && newData.child('senderUid').val() === auth.uid && (!data.exists() || data.child('senderUid').val() === auth.uid)"
           }
         }

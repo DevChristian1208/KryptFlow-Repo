@@ -11,6 +11,7 @@ import { Plus, Smile, ArrowUp, AtSign, BarChart3 } from "lucide-react";
 import EmojiPicker from "./EmojiPicker";
 import PollComposerModal from "./PollComposerModal";
 import { useToast } from "@/app/Context/ToastContext";
+import { useUser } from "@/app/Context/UserContext";
 import { encryptBlob } from "@/app/lib/crypto";
 import type { Member } from "@/app/Context/ChannelContext";
 
@@ -41,6 +42,7 @@ export default function MessageComposer({
   customEmojis,
   enablePolls,
 }: Props) {
+  const { user } = useUser();
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
   const [cooldown, setCooldown] = useState(false);
@@ -190,7 +192,7 @@ export default function MessageComposer({
     HTMLInputElement
   > = async (e) => {
     const files = e.target.files;
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0 || !user?.id) return;
 
     const tooLarge = Array.from(files).filter((f) => f.size > MAX_FILE_SIZE_BYTES);
     if (tooLarge.length > 0) {
@@ -210,7 +212,7 @@ export default function MessageComposer({
     try {
       for (const file of Array.from(files)) {
         try {
-          const path = `attachments/${Date.now()}_${file.name}`;
+          const path = `attachments/${user.id}_${Date.now()}_${file.name}`;
           const storageRef = sRef(storage, path);
           const { ciphertext, ivB64, keyB64, contentType } = await encryptBlob(file);
           await uploadBytes(storageRef, ciphertext);
