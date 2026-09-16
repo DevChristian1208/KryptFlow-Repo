@@ -1031,6 +1031,12 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         "Kein Verschlüsselungs-Schlüssel für diesen Channel verfügbar. Bitte kurz warten, bis ihn ein anderes Mitglied bereitgestellt hat."
       );
     }
+    // Wer selbst erfolgreich schreiben kann, hat zwangsläufig gerade eine
+    // aktive Verbindung — genau der Moment, den sonst niemand garantiert
+    // mitbekommt. Im Hintergrund gleich mit nachliefern, was neuen/anderen
+    // Mitgliedern noch an Schlüssel-Umschlägen fehlt, statt darauf zu
+    // hoffen, dass irgendwann zufällig ein privilegierter Client online ist.
+    ensureUserInAllChannels();
 
     const { ciphertext, iv } = await encryptText(epoch.key, msg);
     const signature = await signText(user.id, ciphertext);
@@ -1205,6 +1211,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       );
       return;
     }
+    ensureUserInAllChannels();
 
     const { ciphertext, iv } = await encryptText(epoch.key, emoji);
     const signature = await signText(user.id, ciphertext);
@@ -1228,6 +1235,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
       );
       return;
     }
+    ensureUserInAllChannels();
 
     const { ciphertext, iv } = await encryptText(epoch.key, String(optionIndex));
     const signature = await signText(user.id, ciphertext);
@@ -1294,6 +1302,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     if (!epoch) {
       throw new Error("Kein Verschlüsselungs-Schlüssel für diesen Channel verfügbar.");
     }
+    ensureUserInAllChannels();
 
     const { ciphertext, iv } = await encryptText(epoch.key, msg);
     const signature = await signText(user.id, ciphertext);
