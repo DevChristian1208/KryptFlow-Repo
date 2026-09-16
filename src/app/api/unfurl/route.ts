@@ -1,21 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
+import dns from "node:dns/promises";
+import net from "node:net";
 
-// Läuft bewusst NICHT über die Nachrichteninhalte selbst (Ende-zu-Ende-
-// verschlüsselt, der Server sieht sie nie) — der Client extrahiert die URL
-// erst NACH dem Entschlüsseln und fragt dann nur die URL selbst hier an.
+// Läuft bewusst NICHT über die Nachrichteninhalte selbst (auch wenn dank der
+// Gäste-Channel-Umstellung nicht mehr ausnahmslos Ende-zu-Ende-verschlüsselt)
+// — der Client extrahiert die URL clientseitig aus dem Nachrichtentext und
+// fragt hier nur die URL selbst an, nie den restlichen Nachrichteninhalt.
 
 const FETCH_TIMEOUT_MS = 5000;
 const MAX_BYTES = 512 * 1024;
+const MAX_REDIRECTS = 5;
 
-function isPrivateHostname(hostname: string): boolean {
+function isPrivateIp(ip: string): boolean {
+  const type = net.isIP(ip);
+  if (type === 4) {
+    const [a, b] = ip.split(".").map(Number);
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    // 169.254.0.0/16 (Link-Local) — deckt u.a. 169.254.169.254 ab, den
+    // Cloud-Metadata-Endpunkt bei AWS/GCP/Azure, ein beliebtes SSRF-Ziel.
+    if (a === 169 && b === 254) return true;
+    // 100.64.0.0/10 (Carrier-Grade NAT)
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+  if (type === 6) {
+    const h = ip.toLowerCase();
+    if (h === "::1" || h === "::") return true;
+    if (h.startsWith("fe8") || h.startsWith("fe9") || h.startsWith("fea") || h.startsWith("feb")) {
+      return true; // fe80::/10, Link-Local
+    }
+    if (h.startsWith("fc") || h.startsWith("fd")) return true; // fc00::/7, Unique Local
+    const v4Mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4Mapped) return isPrivateIp(v4Mapped[1]);
+    return false;
+  }
+  return true; // keine gültige IP -> vorsichtshalber ablehnen
+}
+
+// Prüft nicht nur den Hostnamen selbst, sondern löst ihn per DNS auf und
+// prüft JEDE zurückgegebene Adresse — verhindert sowohl DNS-Rebinding (ein
+// öffentlicher Domainname, der auf eine interne IP zeigt) als auch simple
+// String-Umgehungen des Hostnamen-Checks.
+async function isHostnameSafe(hostname: string): Promise<boolean> {
   const h = hostname.toLowerCase();
-  if (h === "localhost" || h.endsWith(".local")) return true;
-  if (/^127\./.test(h) || h === "0.0.0.0" || h === "::1") return true;
-  if (/^10\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true;
-  return false;
+  if (h === "localhost" || h.endsWith(".local")) return false;
+  if (net.isIP(h)) return !isPrivateIp(h);
+  try {
+    const results = await dns.lookup(h, { all: true, verbatim: true });
+    if (results.length === 0) return false;
+    return results.every((r) => !isPrivateIp(r.address));
+  } catch {
+    return false;
+  }
 }
 
 function extractMeta(html: string) {
@@ -104,7 +142,7 @@ export async function GET(req: NextRequest) {
   if (target.protocol !== "http:" && target.protocol !== "https:") {
     return NextResponse.json({ error: "unsupported protocol" }, { status: 400 });
   }
-  if (isPrivateHostname(target.hostname)) {
+  if (!(await isHostnameSafe(target.hostname))) {
     return NextResponse.json({ error: "forbidden host" }, { status: 400 });
   }
 
@@ -124,14 +162,45 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const res = await fetch(target.toString(), {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; CryptflowLinkPreview/1.0)",
-        Accept: "text/html",
-      },
-    });
+    // redirect: "manual" statt "follow" — jeder Redirect-Sprung wird erneut
+    // gegen isHostnameSafe geprüft, sonst könnte eine harmlos aussehende
+    // öffentliche URL per 3xx auf eine interne Adresse umleiten und der
+    // Hostnamen-Check vom Erstaufruf würde nie greifen.
+    let current = target;
+    let res: Response;
+    for (let hop = 0; ; hop++) {
+      if (hop > MAX_REDIRECTS) {
+        clearTimeout(timeout);
+        return NextResponse.json({ error: "too many redirects" }, { status: 200 });
+      }
+      if (current.protocol !== "http:" && current.protocol !== "https:") {
+        clearTimeout(timeout);
+        return NextResponse.json({ error: "unsupported protocol" }, { status: 400 });
+      }
+      if (!(await isHostnameSafe(current.hostname))) {
+        clearTimeout(timeout);
+        return NextResponse.json({ error: "forbidden host" }, { status: 400 });
+      }
+      res = await fetch(current.toString(), {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; CryptflowLinkPreview/1.0)",
+          Accept: "text/html",
+        },
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) break;
+        try {
+          current = new URL(location, current);
+        } catch {
+          break;
+        }
+        continue;
+      }
+      break;
+    }
     clearTimeout(timeout);
 
     const contentType = res.headers.get("content-type") || "";
