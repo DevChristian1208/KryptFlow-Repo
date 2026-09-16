@@ -140,7 +140,14 @@ export default function CreateOrJoinServerModal({
   }
 
   async function handleCreate() {
-    if (!name.trim() || creating || user?.isGuest) return;
+    if (user?.isGuest) {
+      showToast(
+        "Server erstellen ist nur für registrierte Nutzer verfügbar. Bitte registriere dich.",
+        "info"
+      );
+      return;
+    }
+    if (!name.trim() || creating) return;
     setCreating(true);
     try {
       const serverId = await createServer(
@@ -226,8 +233,16 @@ export default function CreateOrJoinServerModal({
         <div className="flex gap-1 mb-6 border-b border-[var(--border-subtle)]">
           <button
             type="button"
-            onClick={() => !user?.isGuest && setTab("create")}
-            disabled={user?.isGuest}
+            onClick={() => {
+              if (user?.isGuest) {
+                showToast(
+                  "Server erstellen ist nur für registrierte Nutzer verfügbar. Bitte registriere dich.",
+                  "info"
+                );
+                return;
+              }
+              setTab("create");
+            }}
             title={user?.isGuest ? "Nur für registrierte Nutzer verfügbar" : undefined}
             className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition ${
               user?.isGuest

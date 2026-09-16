@@ -86,7 +86,7 @@
     "servers": {
       "$serverId": {
         ".read": "auth != null && (!data.exists() || root.child('serverMembers').child($serverId).child(auth.uid).exists())",
-        ".write": "auth != null && (!data.exists() ? (newData.child('ownerUid').val() === auth.uid && (!root.child('rateLimits').child(auth.uid).child('createServer').exists() || now - root.child('rateLimits').child(auth.uid).child('createServer').val() > 30000)) : root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner')"
+        ".write": "auth != null && (!data.exists() ? (newData.child('ownerUid').val() === auth.uid && root.child('newusers').child(auth.uid).child('isGuest').val() !== true && (!root.child('rateLimits').child(auth.uid).child('createServer').exists() || now - root.child('rateLimits').child(auth.uid).child('createServer').val() > 30000)) : root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner')"
       }
     },
 
