@@ -425,7 +425,7 @@ export default function ChatWindow() {
 
           <div className="px-2 sm:px-4 md:px-6 pb-4 sm:pb-5 pt-2 border-t border-[var(--border-subtle)]">
             <div className="mx-auto w-full max-w-3xl">
-              {me?.isGuest ? (
+              {me?.isGuest && !activeChannel.guestsAllowed ? (
                 <p className="text-sm text-[var(--foreground-secondary)] text-center py-2">
                   Melde dich an, um den vollen Funktionsumfang von Cryptflow nutzen zu können.
                 </p>
