@@ -99,7 +99,9 @@ export default function MessageComposer({
     setSending(true);
     try {
       const mentionedUids = (members || [])
-        .filter((m) => new RegExp(`@${escapeRegex(m.name)}\\b`, "i").test(text))
+        .filter((m) =>
+          new RegExp(`@${escapeRegex(m.name)}(?![\\p{L}\\p{N}_])`, "iu").test(text)
+        )
         .map((m) => m.id);
       await onSend(text, mentionedUids.length ? mentionedUids : undefined);
       setValue("");
@@ -204,30 +206,40 @@ export default function MessageComposer({
 
     const storage = getStorage();
     setSending(true);
+    const failed: string[] = [];
     try {
       for (const file of Array.from(files)) {
-        const path = `attachments/${Date.now()}_${file.name}`;
-        const storageRef = sRef(storage, path);
-        const { ciphertext, ivB64, keyB64, contentType } = await encryptBlob(file);
-        await uploadBytes(storageRef, ciphertext);
-        const url = await getDownloadURL(storageRef);
+        try {
+          const path = `attachments/${Date.now()}_${file.name}`;
+          const storageRef = sRef(storage, path);
+          const { ciphertext, ivB64, keyB64, contentType } = await encryptBlob(file);
+          await uploadBytes(storageRef, ciphertext);
+          const url = await getDownloadURL(storageRef);
 
-        const kind = file.type.startsWith("image/") ? "image" : "file";
-        // Der Einmal-Schlüssel (keyB64/ivB64) steht hier im Klartext, weil
-        // dieser gesamte Marker gleich als Nachrichtentext genauso
-        // verschlüsselt wird wie jede normale Textnachricht — Storage sieht
-        // dadurch nur Ciphertext, der Schlüssel selbst verlässt nie den
-        // E2EE-geschützten Nachrichteninhalt.
-        const marker = `ATTACH::${kind}::${url}::${encodeURIComponent(
-          file.name
-        )}::${ivB64}::${keyB64}::${encodeURIComponent(contentType)}`;
-        await onSend(marker);
+          const kind = file.type.startsWith("image/") ? "image" : "file";
+          // Der Einmal-Schlüssel (keyB64/ivB64) steht hier im Klartext, weil
+          // dieser gesamte Marker gleich als Nachrichtentext genauso
+          // verschlüsselt wird wie jede normale Textnachricht — Storage sieht
+          // dadurch nur Ciphertext, der Schlüssel selbst verlässt nie den
+          // E2EE-geschützten Nachrichteninhalt.
+          const marker = `ATTACH::${kind}::${url}::${encodeURIComponent(
+            file.name
+          )}::${ivB64}::${keyB64}::${encodeURIComponent(contentType)}`;
+          await onSend(marker);
+        } catch (err) {
+          console.error("Upload fehlgeschlagen:", err);
+          failed.push(file.name);
+        }
       }
-    } catch (err) {
-      console.error("Upload fehlgeschlagen:", err);
     } finally {
       setSending(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+    if (failed.length > 0) {
+      showToast(
+        `Hochladen fehlgeschlagen: ${failed.join(", ")}`,
+        "error"
+      );
     }
   };
 

@@ -165,7 +165,7 @@ function isOwn(m: Message, myId?: string | null, myEmail?: string | null) {
 function highlightMentions(text: string, myName?: string): ReactNode {
   if (!myName?.trim()) return text;
   const escaped = myName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`@${escaped}\\b`, "gi");
+  const re = new RegExp(`@${escaped}(?![\\p{L}\\p{N}_])`, "giu");
   const matches = text.match(re);
   if (!matches) return text;
 

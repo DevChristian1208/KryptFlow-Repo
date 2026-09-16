@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { ref, update } from "firebase/database";
+import { ref, get, update } from "firebase/database";
 import {
   deleteUser,
   reauthenticateWithCredential,
@@ -13,7 +13,6 @@ import { db, auth } from "@/app/lib/firebase";
 import { X, TriangleAlert } from "lucide-react";
 import { useToast } from "@/app/Context/ToastContext";
 import { useUser } from "@/app/Context/UserContext";
-import { useChannel } from "@/app/Context/ChannelContext";
 
 export default function DeleteAccountModal({
   isOpen,
@@ -27,7 +26,6 @@ export default function DeleteAccountModal({
   const [password, setPassword] = useState("");
   const { showToast } = useToast();
   const { user } = useUser();
-  const { channels } = useChannel();
   const router = useRouter();
 
   useEffect(() => setMounted(true), []);
@@ -67,17 +65,86 @@ export default function DeleteAccountModal({
       }
 
       const uid = user.id;
+
+      const userServersSnap = await get(ref(db, `userServers/${uid}`));
+      const serverIds = Object.keys(
+        (userServersSnap.val() as Record<string, true> | null) || {}
+      );
+
+      // Owner können ihr Konto nicht einfach löschen, ohne den Server
+      // dauerhaft "verwaist" zurückzulassen (niemand könnte ihn danach noch
+      // löschen oder verwalten, da alle Owner-Aktionen exakt diese Rolle
+      // voraussetzen). Statt das stillschweigend zu tun, hier hart blocken.
+      const ownedServerIds: string[] = [];
+      for (const sid of serverIds) {
+        const memberSnap = await get(ref(db, `serverMembers/${sid}/${uid}`));
+        if ((memberSnap.val() as { role?: string } | null)?.role === "owner") {
+          ownedServerIds.push(sid);
+        }
+      }
+      if (ownedServerIds.length > 0) {
+        showToast(
+          "Du bist Owner von mindestens einem Server. Bitte lösche diesen zuerst oder übertrage die Owner-Rolle, bevor du dein Konto löschst.",
+          "error"
+        );
+        setDeleting(false);
+        return;
+      }
+
+      const [chansSnap, newuserSnap, dmThreadsSnap] = await Promise.all([
+        get(ref(db, "channels")),
+        get(ref(db, `newusers/${uid}`)),
+        get(ref(db, `dmThreads/${uid}`)),
+      ]);
+      const allChans =
+        (chansSnap.val() as Record<string, { serverId?: string }> | null) || {};
+      const myChannelIds = Object.entries(allChans)
+        .filter(([, c]) => c.serverId && serverIds.includes(c.serverId))
+        .map(([id]) => id);
+      const username = (newuserSnap.val() as { username?: string } | null)?.username;
+      const dmOtherUids = Object.keys(
+        (dmThreadsSnap.val() as Record<string, unknown> | null) || {}
+      );
+
+      // Erst die Blätter (Channel-Mitgliedschaft/-Schlüssel), die noch eine
+      // bestehende serverMembers-Zugehörigkeit voraussetzen, dann erst
+      // serverMembers selbst entfernen (Cross-Path-Problem, wie an anderer
+      // Stelle in dieser App bereits mehrfach aufgetreten).
+      const leafUpdates: Record<string, null> = {};
+      for (const cid of myChannelIds) {
+        leafUpdates[`channelKeys/${cid}/${uid}`] = null;
+        leafUpdates[`channels/${cid}/members/${uid}`] = null;
+      }
+      if (Object.keys(leafUpdates).length > 0) {
+        await update(ref(db), leafUpdates);
+      }
+
+      // dmThreads/{uid} und userServers/{uid} haben keine Schreibregel für
+      // den ganzen Knoten, nur für die einzelnen Unterpfade — deshalb hier
+      // jedes Kind einzeln adressieren statt den Elternknoten zu löschen.
       const updates: Record<string, null> = {
         [`newusers/${uid}`]: null,
         [`publicKeys/${uid}`]: null,
         [`presence/${uid}`]: null,
-        [`dmThreads/${uid}`]: null,
       };
-      for (const c of channels) {
-        updates[`channelKeys/${c.id}/${uid}`] = null;
-        updates[`channels/${c.id}/members/${uid}`] = null;
+      for (const otherUid of dmOtherUids) {
+        updates[`dmThreads/${uid}/${otherUid}`] = null;
+      }
+      for (const sid of serverIds) {
+        updates[`userServers/${uid}/${sid}`] = null;
+      }
+      if (username) {
+        updates[`usernames/${username}`] = null;
       }
       await update(ref(db), updates);
+
+      const serverMemberUpdates: Record<string, null> = {};
+      for (const sid of serverIds) {
+        serverMemberUpdates[`serverMembers/${sid}/${uid}`] = null;
+      }
+      if (Object.keys(serverMemberUpdates).length > 0) {
+        await update(ref(db), serverMemberUpdates);
+      }
 
       if (current) await deleteUser(current);
 
