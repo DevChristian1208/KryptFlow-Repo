@@ -53,6 +53,7 @@ type ChannelDb = {
   serverId?: string;
   restricted?: boolean;
   announcementOnly?: boolean;
+  guestsAllowed?: boolean;
 };
 
 type ChannelMessageDb = {
@@ -93,6 +94,7 @@ export type Channel = {
   serverId?: string;
   restricted?: boolean;
   announcementOnly?: boolean;
+  guestsAllowed?: boolean;
 };
 
 export type ReactionGroup = { emoji: string; uids: string[] };
@@ -144,6 +146,7 @@ type ChannelContextType = {
   ) => Promise<void>;
   setChannelRestricted: (channelId: string, restricted: boolean) => Promise<void>;
   setChannelAnnouncementOnly: (channelId: string, announcementOnly: boolean) => Promise<void>;
+  setChannelGuestsAllowed: (channelId: string, guestsAllowed: boolean) => Promise<void>;
   deleteChannel: (channelId: string) => Promise<void>;
   inviteToChannel: (channelId: string, channelName: string, targetUid: string) => Promise<void>;
   sendMessage: (text: string, mentionedUids?: string[]) => Promise<void>;
@@ -628,6 +631,21 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     return () => unsubs.forEach((u) => u());
   }, [authReady, user?.id, servers, ensureUserInAllChannels]);
 
+  // Ändert sich die Identität eines Mitglieds (neue keyVersion — z. B. durch
+  // die Selbstheilung in ensureIdentityAndAutoBackup, wenn lokale und
+  // veröffentlichte Identität auseinanderliefen), ändern sich dabei weder
+  // channels noch serverMembers — ohne diesen Listener bliebe das
+  // betroffene Mitglied für alle ANDEREN, bereits geöffneten Clients
+  // unsichtbar mit einem für die neue Identität unentschlüsselbaren
+  // Channel-Key stehen, bis zufällig irgendwo sonst ein Update passiert.
+  useEffect(() => {
+    if (!authReady || !user?.id) return;
+    const unsub = onValue(ref(db, "publicKeys"), () => {
+      ensureUserInAllChannels();
+    });
+    return () => unsub();
+  }, [authReady, user?.id, ensureUserInAllChannels]);
+
   useEffect(() => {
     if (!authReady || !user?.id || !activeServerId) {
       setChannels([]);
@@ -656,6 +674,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
           serverId: c.serverId,
           restricted: c.restricted,
           announcementOnly: c.announcementOnly,
+          guestsAllowed: c.guestsAllowed,
         }))
         .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
 
@@ -1317,6 +1336,15 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const setChannelGuestsAllowed = async (channelId: string, guestsAllowed: boolean) => {
+    try {
+      await update(ref(db, `channels/${channelId}`), { guestsAllowed });
+    } catch (e) {
+      console.error("[ChannelContext] setChannelGuestsAllowed fehlgeschlagen:", e);
+      throw new Error("Kanal-Einstellung konnte nicht geändert werden.");
+    }
+  };
+
   const deleteChannel = async (channelId: string) => {
     try {
       // Erst die Blätter (Nachrichten/Schlüssel), dann den Kanal selbst, in
@@ -1357,6 +1385,7 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
         inviteToChannel,
         setChannelRestricted,
         setChannelAnnouncementOnly,
+        setChannelGuestsAllowed,
         deleteChannel,
         sendMessage,
         editMessage,

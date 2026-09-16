@@ -138,10 +138,21 @@ export default function SelectAvatar() {
 
           <div className="w-24 h-24 rounded-full bg-[var(--surface-elevated)] border border-[var(--border-subtle)] mx-auto flex items-center justify-center overflow-hidden relative">
             <Image
+              key={avatarUrl || "default"}
               src={avatarUrl || "/81. Profile.png"}
               alt="Ausgewählter Avatar"
               fill
+              sizes="96px"
               className="object-cover"
+              onError={() => {
+                if (avatarUrl) {
+                  showToast(
+                    "Bild konnte nicht geladen werden. Bitte ein anderes Bild versuchen.",
+                    "error"
+                  );
+                  setAvatarUrl(null);
+                }
+              }}
             />
           </div>
 

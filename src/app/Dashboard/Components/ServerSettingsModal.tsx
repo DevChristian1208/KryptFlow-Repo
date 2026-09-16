@@ -95,7 +95,8 @@ export default function ServerSettingsModal({
     deleteServerRole,
     setMemberTagRoles,
   } = useServer();
-  const { channels, setChannelRestricted, setChannelAnnouncementOnly, deleteChannel } = useChannel();
+  const { channels, setChannelRestricted, setChannelAnnouncementOnly, setChannelGuestsAllowed, deleteChannel } =
+    useChannel();
   const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
   const [tagPopoverUid, setTagPopoverUid] = useState<string | null>(null);
   const [newsBotSetupOpen, setNewsBotSetupOpen] = useState(false);
@@ -951,6 +952,18 @@ export default function ServerSettingsModal({
                       />
                       Nur Admins schreiben
                     </label>
+                    <label
+                      className="flex items-center gap-2 text-xs text-[var(--foreground-secondary)] cursor-pointer"
+                      title="Gast-Accounts dürfen hier schreiben (sonst nur registrierte Mitglieder)"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!c.guestsAllowed}
+                        onChange={(e) => setChannelGuestsAllowed(c.id, e.target.checked)}
+                        className="accent-[var(--accent)]"
+                      />
+                      Gäste dürfen schreiben
+                    </label>
                     <button
                       type="button"
                       aria-label={`#${c.name} löschen`}
@@ -985,6 +998,7 @@ export default function ServerSettingsModal({
                   <span className="text-xs text-[var(--foreground-secondary)] shrink-0">
                     {c.restricted ? "Eingeschränkt" : "Offen"}
                     {c.announcementOnly ? " · nur Admins schreiben" : ""}
+                    {c.guestsAllowed ? " · Gäste dürfen schreiben" : ""}
                   </span>
                 )}
               </div>
