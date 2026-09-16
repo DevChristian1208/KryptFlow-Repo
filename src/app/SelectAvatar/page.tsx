@@ -143,6 +143,7 @@ export default function SelectAvatar() {
               alt="Ausgewählter Avatar"
               fill
               sizes="96px"
+              unoptimized={!!avatarUrl}
               className="object-cover"
               onError={() => {
                 if (avatarUrl) {
