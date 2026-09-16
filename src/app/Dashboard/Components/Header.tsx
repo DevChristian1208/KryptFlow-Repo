@@ -13,6 +13,7 @@ import { Menu, ChevronDown, Sun, Moon, Bookmark } from "lucide-react";
 import SettingsModal from "./SettingsModal";
 import InvitesPanel from "./InvitesPanel";
 import SavedMessagesModal from "./SavedMessagesModal";
+import { useToast } from "@/app/Context/ToastContext";
 
 export default function Header({
   onToggleHeader,
@@ -23,6 +24,7 @@ export default function Header({
   const { theme, toggleTheme } = useTheme();
   const { signOutPresence } = usePresence();
   const { endCurrentSession } = useSession();
+  const { showToast } = useToast();
   const [dropDown, setDropDown] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [savedOpen, setSavedOpen] = useState(false);
@@ -30,14 +32,17 @@ export default function Header({
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   async function handleLogout() {
+    setDropDown(false);
+    // Best effort: Präsenz-/Sitzungs-Aufräumen soll das eigentliche Ausloggen
+    // nicht blockieren, falls einer der beiden Schritte fehlschlägt.
+    await signOutPresence().catch((e) => console.error("[Header] signOutPresence fehlgeschlagen:", e));
+    await endCurrentSession().catch((e) => console.error("[Header] endCurrentSession fehlgeschlagen:", e));
     try {
-      setDropDown(false);
-      await signOutPresence();
-      await endCurrentSession();
       await signOut(auth);
       router.push("/Login");
     } catch (error) {
-      console.log(error);
+      console.error("[Header] Logout fehlgeschlagen:", error);
+      showToast("Abmelden fehlgeschlagen. Bitte erneut versuchen.", "error");
     }
   }
 

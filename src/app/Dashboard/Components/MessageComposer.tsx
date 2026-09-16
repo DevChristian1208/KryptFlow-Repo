@@ -21,7 +21,6 @@ type Props = {
   disabled?: boolean;
   members?: Member[];
   onTyping?: () => void;
-  customEmojis?: { id: string; name: string; url: string }[];
   enablePolls?: boolean;
 };
 
@@ -39,7 +38,6 @@ export default function MessageComposer({
   disabled,
   members,
   onTyping,
-  customEmojis,
   enablePolls,
 }: Props) {
   const { user } = useUser();
@@ -341,7 +339,6 @@ export default function MessageComposer({
         {showEmoji && (
           <div ref={emojiRef} className="absolute bottom-11 right-0 z-50">
             <EmojiPicker
-              customEmojis={customEmojis}
               onSelect={(e) => {
                 addEmoji(e);
                 setShowEmoji(false);

@@ -177,9 +177,24 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       }
 
       await update(ref(db), joinUpdates);
-      await update(ref(db), {
-        [`channelInvites/${user.id}/${invite.channelId}`]: null,
-      });
+
+      // Der Beitritt ist an dieser Stelle bereits abgeschlossen — ein
+      // Fehlschlag bei diesem rein kosmetischen Aufräum-Schritt darf nicht
+      // als "Beitreten fehlgeschlagen" beim Nutzer ankommen. Ein kurzer
+      // Retry deckt die meisten transienten Fehler ab; schlägt auch der
+      // fehl, bleibt die Einladung sichtbar stehen (kann dann manuell
+      // abgelehnt werden), statt den bereits erfolgreichen Beitritt als
+      // Fehler zu melden.
+      const cleanupInvite = () =>
+        update(ref(db), { [`channelInvites/${user.id}/${invite.channelId}`]: null });
+      try {
+        await cleanupInvite();
+      } catch {
+        await new Promise((r) => setTimeout(r, 1500));
+        await cleanupInvite().catch((e) =>
+          console.error("[NotificationContext] Einladung konnte nicht aufgeräumt werden:", e)
+        );
+      }
     },
     [user?.id]
   );

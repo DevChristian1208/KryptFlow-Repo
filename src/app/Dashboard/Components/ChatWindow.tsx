@@ -71,7 +71,7 @@ export default function ChatWindow() {
     notifyTyping,
   } = useChannel();
 
-  const { activeServer, customEmojis } = useServer();
+  const { activeServer } = useServer();
 
   const {
     activeDMUser,
@@ -426,7 +426,6 @@ export default function ChatWindow() {
                 onPinMessage={pinMessage}
                 onUnpinMessage={unpinMessage}
                 onGetEditHistory={getMessageEditHistory}
-                customEmojis={customEmojis}
                 pollVotesByMessage={pollVotesByMessage}
                 onVotePoll={votePoll}
               />
@@ -459,7 +458,6 @@ export default function ChatWindow() {
                   placeholder={`Nachricht an #${activeChannel.name}`}
                   members={members}
                   onTyping={notifyTyping}
-                  customEmojis={customEmojis}
                   enablePolls
                   onSend={async (text, mentionedUids) =>
                     await sendMessage(text, mentionedUids)

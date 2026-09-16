@@ -324,15 +324,6 @@
       }
     },
 
-    "serverEmojis": {
-      "$serverId": {
-        ".read": "auth != null && root.child('serverMembers').child($serverId).child(auth.uid).exists()",
-        "$emojiId": {
-          ".write": "auth != null && (root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'owner' || root.child('serverMembers').child($serverId).child(auth.uid).child('role').val() === 'admin')"
-        }
-      }
-    },
-
     "serverRoles": {
       "$serverId": {
         ".read": "auth != null && root.child('serverMembers').child($serverId).child(auth.uid).exists()",

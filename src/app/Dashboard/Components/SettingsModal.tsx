@@ -1189,7 +1189,13 @@ function SessionsSection() {
             </div>
             {s.id !== currentSessionId && (
               <button
-                onClick={() => endSession(s.id)}
+                onClick={async () => {
+                  try {
+                    await endSession(s.id);
+                  } catch {
+                    showToast("Sitzung konnte nicht beendet werden.", "error");
+                  }
+                }}
                 className="btn-secondary text-xs shrink-0"
               >
                 Abmelden

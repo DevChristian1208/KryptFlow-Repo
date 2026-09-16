@@ -175,7 +175,7 @@ export default function MembersModal({
 
         <div className="max-h-[60vh] sm:max-h-[65vh] overflow-y-auto px-3 sm:px-5 py-3 space-y-2">
           {filtered.map((m) => {
-            const isSelf = user?.email && m.email && user.email === m.email;
+            const isSelf = !!user?.id && m.id === user.id;
 
             return (
               <div

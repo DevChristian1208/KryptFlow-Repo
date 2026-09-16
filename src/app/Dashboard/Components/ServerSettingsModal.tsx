@@ -33,14 +33,11 @@ import {
   Upload,
   LogOut,
   Trash2,
-  SmilePlus,
   Tag,
   Plus,
-  Bot,
 } from "lucide-react";
-import NewsBotSetupModal from "./NewsBotSetupModal";
 
-type Tab = "overview" | "members" | "invites" | "channels" | "emojis" | "roles";
+type Tab = "overview" | "members" | "invites" | "channels" | "roles";
 
 type MemberRow = {
   uid: string;
@@ -87,9 +84,6 @@ export default function ServerSettingsModal({
     createInvite,
     inviteUserToServer,
     setActiveServerId,
-    customEmojis,
-    addServerEmoji,
-    removeServerEmoji,
     serverRoles,
     createServerRole,
     deleteServerRole,
@@ -99,8 +93,6 @@ export default function ServerSettingsModal({
     useChannel();
   const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
   const [tagPopoverUid, setTagPopoverUid] = useState<string | null>(null);
-  const [newsBotSetupOpen, setNewsBotSetupOpen] = useState(false);
-  const [postingNews, setPostingNews] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleColor, setNewRoleColor] = useState("#0a84ff");
   const [creatingRole, setCreatingRole] = useState(false);
@@ -120,10 +112,6 @@ export default function ServerSettingsModal({
   const [uploadingBanner, setUploadingBanner] = useState(false);
   const iconInputRef = useRef<HTMLInputElement | null>(null);
   const bannerInputRef = useRef<HTMLInputElement | null>(null);
-  const emojiInputRef = useRef<HTMLInputElement | null>(null);
-  const [newEmojiName, setNewEmojiName] = useState("");
-  const [uploadingEmoji, setUploadingEmoji] = useState(false);
-  const [removingEmojiId, setRemovingEmojiId] = useState<string | null>(null);
 
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [bannedUsers, setBannedUsers] = useState<{ uid: string; name: string }[]>([]);
@@ -391,31 +379,6 @@ export default function ServerSettingsModal({
     }
   }
 
-  async function handleEmojiSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    const name = newEmojiName.trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
-    if (!file || !user?.id || uploadingEmoji) return;
-    if (!name) {
-      showToast("Bitte zuerst einen Namen (nur a-z, 0-9, _) eingeben.", "error");
-      return;
-    }
-    setUploadingEmoji(true);
-    try {
-      const url = await uploadImage(file, `serverEmojis/${user.id}_${Date.now()}`);
-      await addServerEmoji(name, url);
-      setNewEmojiName("");
-      showToast("Emoji hinzugefügt.", "success");
-    } catch (err) {
-      showToast(
-        err instanceof ImageValidationError ? err.message : "Emoji-Upload fehlgeschlagen.",
-        "error"
-      );
-    } finally {
-      setUploadingEmoji(false);
-    }
-  }
-
   async function handleCreateInvite() {
     if (creatingInvite) return;
     setCreatingInvite(true);
@@ -454,7 +417,6 @@ export default function ServerSettingsModal({
     { id: "members", label: "Mitglieder", icon: Users },
     { id: "invites", label: "Einladungen", icon: LinkIcon },
     { id: "channels", label: "Kanäle", icon: Hash },
-    { id: "emojis", label: "Emojis", icon: SmilePlus },
     { id: "roles", label: "Rollen", icon: Tag },
   ];
 
@@ -584,49 +546,6 @@ export default function ServerSettingsModal({
                 </button>
               )}
             </div>
-
-            {isAdmin && (
-              <div className="pt-6 border-t border-[var(--border-subtle)] mb-2">
-                <h3 className="text-sm font-semibold text-[var(--foreground-secondary)] uppercase tracking-wide mb-3 flex items-center gap-2">
-                  <Bot size={14} /> News-Bot
-                </h3>
-                <p className="text-sm text-[var(--foreground-secondary)] mb-3">
-                  Postet automatisch einen Tech-News-Digest (Hacker News) in den
-                  #news-Channel, damit neue Server nicht komplett leer wirken.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => setNewsBotSetupOpen(true)}
-                    className="btn-secondary text-sm"
-                  >
-                    <Bot size={14} />
-                    Bot einrichten
-                  </button>
-                  <button
-                    onClick={async () => {
-                      setPostingNews(true);
-                      try {
-                        const res = await fetch("/api/newsbot/post", { method: "POST" });
-                        const data = await res.json();
-                        if (!res.ok) throw new Error(data.error || "Fehlgeschlagen.");
-                        showToast("News gepostet.", "success");
-                      } catch (e) {
-                        showToast(
-                          e instanceof Error ? e.message : "Posten fehlgeschlagen.",
-                          "error"
-                        );
-                      } finally {
-                        setPostingNews(false);
-                      }
-                    }}
-                    disabled={postingNews}
-                    className="btn-secondary text-sm"
-                  >
-                    {postingNews ? "Postet…" : "Jetzt News posten"}
-                  </button>
-                </div>
-              </div>
-            )}
 
             {isOwner ? (
               <div className="pt-6 border-t border-[var(--border-subtle)]">
@@ -1006,87 +925,6 @@ export default function ServerSettingsModal({
           </div>
         )}
 
-        {tab === "emojis" && (
-          <div>
-            {isAdmin && (
-              <>
-                <input
-                  ref={emojiInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleEmojiSelected}
-                />
-                <div className="flex gap-2 mb-4">
-                  <div className="input-pill flex-1">
-                    <input
-                      value={newEmojiName}
-                      onChange={(e) => setNewEmojiName(e.target.value)}
-                      type="text"
-                      placeholder="name (a-z, 0-9, _)"
-                      maxLength={32}
-                    />
-                  </div>
-                  <button
-                    onClick={() => emojiInputRef.current?.click()}
-                    disabled={uploadingEmoji || !newEmojiName.trim()}
-                    className="btn-secondary text-sm shrink-0"
-                  >
-                    <Upload size={13} />
-                    {uploadingEmoji ? "Lädt hoch…" : "Bild wählen"}
-                  </button>
-                </div>
-              </>
-            )}
-            {customEmojis.length === 0 ? (
-              <p className="text-sm text-[var(--foreground-secondary)]">
-                Noch keine eigenen Emojis.
-              </p>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {customEmojis.map((e) => (
-                  <div
-                    key={e.id}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-xl bg-[var(--surface-elevated)] border border-[var(--border-subtle)]"
-                  >
-                    <Image
-                      src={e.url}
-                      alt={e.name}
-                      width={22}
-                      height={22}
-                      className="rounded shrink-0"
-                      unoptimized
-                    />
-                    <span className="text-xs text-[var(--foreground)] truncate flex-1">
-                      :{e.name}:
-                    </span>
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        aria-label={`Emoji :${e.name}: löschen`}
-                        disabled={removingEmojiId === e.id}
-                        onClick={async () => {
-                          setRemovingEmojiId(e.id);
-                          try {
-                            await removeServerEmoji(e.id);
-                          } catch {
-                            showToast("Löschen fehlgeschlagen.", "error");
-                          } finally {
-                            setRemovingEmojiId(null);
-                          }
-                        }}
-                        className="btn-icon w-6 h-6 shrink-0 text-[var(--danger)]"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         {tab === "roles" && (
           <div>
             <p className="text-xs text-[var(--foreground-secondary)] mb-4">
@@ -1178,10 +1016,6 @@ export default function ServerSettingsModal({
       busy={deleting || leaving || deletingChannelId !== null}
       onConfirm={() => confirmState?.onConfirm()}
       onCancel={() => setConfirmState(null)}
-    />
-    <NewsBotSetupModal
-      isOpen={newsBotSetupOpen}
-      onClose={() => setNewsBotSetupOpen(false)}
     />
     </>,
     document.body

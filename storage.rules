@@ -15,7 +15,7 @@ service firebase.storage {
     match /avatars/{fileName} {
       allow read: if request.auth != null;
       allow write: if request.auth != null
-        && fileName.matches(request.auth.uid + '_.*')
+        && fileName.matches('^' + request.auth.uid + '_.*')
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
     }
@@ -23,7 +23,7 @@ service firebase.storage {
     match /serverIcons/{fileName} {
       allow read: if request.auth != null;
       allow write: if request.auth != null
-        && fileName.matches(request.auth.uid + '_.*')
+        && fileName.matches('^' + request.auth.uid + '_.*')
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
     }
@@ -31,16 +31,8 @@ service firebase.storage {
     match /serverBanners/{fileName} {
       allow read: if request.auth != null;
       allow write: if request.auth != null
-        && fileName.matches(request.auth.uid + '_.*')
+        && fileName.matches('^' + request.auth.uid + '_.*')
         && request.resource.size < 8 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
-    }
-
-    match /serverEmojis/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
-        && fileName.matches(request.auth.uid + '_.*')
-        && request.resource.size < 1024 * 1024
         && request.resource.contentType.matches('image/.*');
     }
 
@@ -56,7 +48,7 @@ service firebase.storage {
     match /attachments/{fileName} {
       allow read: if request.auth != null;
       allow write: if request.auth != null
-        && fileName.matches(request.auth.uid + '_.*')
+        && fileName.matches('^' + request.auth.uid + '_.*')
         && request.resource.size < 15 * 1024 * 1024
         && request.resource.contentType == 'application/octet-stream';
     }

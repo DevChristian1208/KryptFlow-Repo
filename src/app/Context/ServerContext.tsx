@@ -54,8 +54,6 @@ type ServerInviteDb = {
   useCount?: number;
 };
 
-export type ServerEmoji = { id: string; name: string; url: string };
-
 export type CustomRole = { id: string; name: string; color: string };
 
 type ServerContextType = {
@@ -63,9 +61,6 @@ type ServerContextType = {
   activeServerId: string | null;
   activeServer: Server | null;
   setActiveServerId: (id: string | null) => void;
-  customEmojis: ServerEmoji[];
-  addServerEmoji: (name: string, url: string, serverIdOverride?: string) => Promise<void>;
-  removeServerEmoji: (emojiId: string) => Promise<void>;
   serverRoles: CustomRole[];
   createServerRole: (name: string, color: string) => Promise<void>;
   deleteServerRole: (roleId: string) => Promise<void>;
@@ -167,23 +162,6 @@ export function ServerProvider({ children }: { children: ReactNode }) {
 
   const activeServer = servers.find((s) => s.id === activeServerId) || null;
 
-  const [customEmojis, setCustomEmojis] = useState<ServerEmoji[]>([]);
-
-  useEffect(() => {
-    setCustomEmojis([]);
-    if (!activeServerId) return;
-    const r = ref(db, `serverEmojis/${activeServerId}`);
-    const unsub = onValue(r, (snap) => {
-      const raw = (snap.val() as Record<string, { name: string; url: string }> | null) || {};
-      setCustomEmojis(
-        Object.entries(raw)
-          .map(([id, v]) => ({ id, name: v.name, url: v.url }))
-          .sort((a, b) => a.name.localeCompare(b.name))
-      );
-    });
-    return () => off(r, "value", unsub);
-  }, [activeServerId]);
-
   const [serverRoles, setServerRoles] = useState<CustomRole[]>([]);
 
   useEffect(() => {
@@ -233,24 +211,6 @@ export function ServerProvider({ children }: { children: ReactNode }) {
     [activeServerId]
   );
 
-  const addServerEmoji = useCallback(
-    async (name: string, url: string, serverIdOverride?: string): Promise<void> => {
-      const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
-      const targetServerId = serverIdOverride || activeServerId;
-      if (!targetServerId || !clean) throw new Error("Ungültiger Name.");
-      const emojiRef = push(ref(db, `serverEmojis/${targetServerId}`));
-      await set(emojiRef, { name: clean, url });
-    },
-    [activeServerId]
-  );
-
-  const removeServerEmoji = useCallback(
-    async (emojiId: string): Promise<void> => {
-      if (!activeServerId) return;
-      await set(ref(db, `serverEmojis/${activeServerId}/${emojiId}`), null);
-    },
-    [activeServerId]
-  );
 
   const createServer = useCallback(
     async (
@@ -608,9 +568,6 @@ export function ServerProvider({ children }: { children: ReactNode }) {
         activeServerId,
         activeServer,
         setActiveServerId,
-        customEmojis,
-        addServerEmoji,
-        removeServerEmoji,
         serverRoles,
         createServerRole,
         deleteServerRole,

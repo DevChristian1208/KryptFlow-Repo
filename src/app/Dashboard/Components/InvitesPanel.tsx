@@ -89,7 +89,13 @@ export default function InvitesPanel() {
               </button>
               <button
                 type="button"
-                onClick={() => declineChannelInvite(invite.channelId)}
+                onClick={async () => {
+                  try {
+                    await declineChannelInvite(invite.channelId);
+                  } catch {
+                    showToast("Ablehnen fehlgeschlagen.", "error");
+                  }
+                }}
                 className="btn-icon w-7 h-7 text-[var(--danger)]"
                 aria-label="Ablehnen"
               >
@@ -129,7 +135,13 @@ export default function InvitesPanel() {
               </button>
               <button
                 type="button"
-                onClick={() => declineServerDirectInvite(invite.serverId)}
+                onClick={async () => {
+                  try {
+                    await declineServerDirectInvite(invite.serverId);
+                  } catch {
+                    showToast("Ablehnen fehlgeschlagen.", "error");
+                  }
+                }}
                 className="btn-icon w-7 h-7 text-[var(--danger)]"
                 aria-label="Ablehnen"
               >
@@ -178,7 +190,13 @@ export default function InvitesPanel() {
               </button>
               <button
                 type="button"
-                onClick={() => declineFriendRequest(req.fromUid)}
+                onClick={async () => {
+                  try {
+                    await declineFriendRequest(req.fromUid);
+                  } catch {
+                    showToast("Ablehnen fehlgeschlagen.", "error");
+                  }
+                }}
                 className="btn-icon w-7 h-7 text-[var(--danger)]"
                 aria-label="Ablehnen"
               >

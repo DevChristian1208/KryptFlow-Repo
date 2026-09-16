@@ -187,46 +187,6 @@ function highlightMentions(text: string, myName?: string): ReactNode {
   return nodes;
 }
 
-const EMOJI_SHORTCODE_RE = /:([a-z0-9_]+):/g;
-
-function substituteCustomEmojis(
-  nodes: ReactNode,
-  emojis?: { id: string; name: string; url: string }[]
-): ReactNode {
-  if (!emojis || emojis.length === 0) return nodes;
-  const byName = new Map(emojis.map((e) => [e.name, e.url]));
-
-  function processString(text: string, keyPrefix: string): ReactNode[] {
-    const out: ReactNode[] = [];
-    let lastIndex = 0;
-    let i = 0;
-    EMOJI_SHORTCODE_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = EMOJI_SHORTCODE_RE.exec(text))) {
-      const url = byName.get(m[1]);
-      if (!url) continue;
-      if (m.index > lastIndex) out.push(text.slice(lastIndex, m.index));
-      out.push(
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          key={`${keyPrefix}-${i++}`}
-          src={url}
-          alt={`:${m[1]}:`}
-          className="inline-block w-5 h-5 align-text-bottom mx-0.5"
-        />
-      );
-      lastIndex = m.index + m[0].length;
-    }
-    if (lastIndex < text.length) out.push(text.slice(lastIndex));
-    return out.length ? out : [text];
-  }
-
-  const arr = Array.isArray(nodes) ? nodes : [nodes];
-  return arr.flatMap((n, idx) =>
-    typeof n === "string" ? processString(n, `ce-${idx}`) : n
-  );
-}
-
 type ParsedAttachment = {
   kind: "image" | "file";
   url: string;
@@ -492,7 +452,6 @@ type MessageListProps = {
   onPinMessage?: (messageId: string) => Promise<void>;
   onUnpinMessage?: (messageId: string) => Promise<void>;
   onGetEditHistory?: (messageId: string) => Promise<EditHistoryEntry[]>;
-  customEmojis?: { id: string; name: string; url: string }[];
   pollVotesByMessage?: Record<string, Record<string, number>>;
   onVotePoll?: (messageId: string, optionIndex: number) => Promise<void>;
   saveContext?: { kind: "channel"; channelId: string } | { kind: "dm"; otherUid: string };
@@ -515,7 +474,6 @@ export default function MessageList({
   onPinMessage,
   onUnpinMessage,
   onGetEditHistory,
-  customEmojis,
   pollVotesByMessage,
   onVotePoll,
   saveContext,
@@ -849,12 +807,7 @@ export default function MessageList({
                 )
               ) : (
                 <p className="whitespace-pre-wrap break-words">
-                  {m.deleted
-                    ? m.text
-                    : substituteCustomEmojis(
-                        highlightMentions(m.text, me?.name),
-                        customEmojis
-                      )}
+                  {m.deleted ? m.text : highlightMentions(m.text, me?.name)}
                 </p>
               )}
             </div>

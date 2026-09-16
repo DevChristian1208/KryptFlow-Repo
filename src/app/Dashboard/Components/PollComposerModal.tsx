@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Plus, Trash2, BarChart3 } from "lucide-react";
+import { useToast } from "@/app/Context/ToastContext";
 
 type Props = {
   isOpen: boolean;
@@ -15,6 +16,7 @@ export default function PollComposerModal({ isOpen, onClose, onCreate }: Props) 
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState(["", ""]);
   const [creating, setCreating] = useState(false);
+  const { showToast } = useToast();
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -43,6 +45,8 @@ export default function PollComposerModal({ isOpen, onClose, onCreate }: Props) 
     try {
       await onCreate(question.trim(), validOptions);
       onClose();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Umfrage konnte nicht erstellt werden.", "error");
     } finally {
       setCreating(false);
     }
