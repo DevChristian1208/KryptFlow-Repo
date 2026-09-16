@@ -239,13 +239,28 @@ type ParsedAttachment = {
   contentType?: string;
 };
 
+// Echte Anhänge kommen IMMER aus uploadBytes()/getDownloadURL() gegen den
+// eigenen Storage-Bucket (siehe MessageComposer.tsx). Jede Nachricht ist
+// aber freier Text — ohne diese Prüfung könnte eine präparierte
+// "ATTACH::image::https://fremder-server/..."-Nachricht bei jedem
+// Empfänger automatisch ein beliebiges externes Bild nachladen (Tracking-
+// Pixel: verrät IP-Adresse und Lesezeitpunkt, sogar in E2EE-Channels).
+const ATTACHMENT_ALLOWED_HOSTS = new Set(["firebasestorage.googleapis.com"]);
+
 function parseAttachment(text: string): ParsedAttachment | null {
   if (!text.startsWith("ATTACH::")) return null;
   const parts = text.split("::");
   if (parts.length < 3) return null;
   const kind = parts[1] === "image" ? "image" : "file";
   const url = parts[2];
-  if (!/^https?:\/\//i.test(url)) return null;
+  if (!/^https:\/\//i.test(url)) return null;
+  try {
+    if (!ATTACHMENT_ALLOWED_HOSTS.has(new URL(url).hostname.toLowerCase())) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
   const name = parts[3]
     ? decodeURIComponent(parts[3])
     : kind === "image"

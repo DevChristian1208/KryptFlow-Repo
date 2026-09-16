@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "node:crypto";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { ref, get, push, update } from "firebase/database";
 import { auth, db } from "@/app/lib/firebase";
@@ -45,7 +46,26 @@ async function fetchDigest(): Promise<string> {
   return `📰 Tech-News vom ${dateLabel} (Hacker News)\n\n${lines.join("\n\n")}`;
 }
 
-export async function POST() {
+// Diese Route hat sonst keinerlei Zugriffsschutz — ohne Secret könnte
+// jeder, der die URL kennt, sie beliebig oft aufrufen (Spam im Channel,
+// wiederholte Bot-Logins, Firebase-/Hacker-News-Kontingent-Verbrauch).
+// Folgt der von Vercel Cron erwarteten Konvention (Header
+// "Authorization: Bearer <CRON_SECRET>"), funktioniert aber genauso mit
+// jedem anderen externen Scheduler, der einen Bearer-Header setzen kann.
+function isAuthorized(req: NextRequest): boolean {
+  const secret = process.env.NEWSBOT_CRON_SECRET;
+  if (!secret) return false;
+  const expected = Buffer.from(`Bearer ${secret}`);
+  const actual = Buffer.from(req.headers.get("authorization") || "");
+  if (actual.length !== expected.length) return false;
+  return timingSafeEqual(actual, expected);
+}
+
+export async function POST(req: NextRequest) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const {
     NEWSBOT_EMAIL,
     NEWSBOT_PASSWORD,
