@@ -292,7 +292,7 @@ export default function MessageComposer({
       <div className="relative flex-1">
         <textarea
           ref={textareaRef}
-          className="w-full max-h-[160px] resize-none outline-none overflow-y-auto text-[14px] md:text-[15px] leading-[1.4] py-2 bg-transparent text-[var(--foreground)] placeholder:text-[var(--foreground-secondary)]"
+          className="w-full max-h-[160px] resize-none outline-none overflow-y-auto text-[14px] md:text-[15px] leading-[1.4] py-2 bg-transparent text-[var(--foreground)] placeholder:text-[var(--foreground-secondary)] placeholder:truncate placeholder:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis"
           rows={1}
           placeholder={placeholder || "Nachricht schreiben…"}
           value={value}
