@@ -1,6 +1,6 @@
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
-export const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+export const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 const UPLOAD_TIMEOUT_MS = 15000;
 
 export class ImageValidationError extends Error {}

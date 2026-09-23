@@ -26,7 +26,7 @@ type Props = {
 
 const POLL_MARKER = "POLL::";
 
-const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15 MB
+const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

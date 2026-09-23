@@ -509,9 +509,6 @@ export default function SettingsModal({
   );
 }
 
-/* -----------------------------------------------------------
- * SICHERHEIT: Passwort ändern + 2FA (TOTP, nativ über Firebase Auth MFA)
- * ---------------------------------------------------------*/
 function SecurityTab() {
   const { user } = useUser();
   const { showToast } = useToast();
@@ -819,9 +816,6 @@ function SecurityTab() {
   );
 }
 
-/* -----------------------------------------------------------
- * SICHERHEIT: Aktivitätsprotokoll (nur für den eigenen Account einsehbar)
- * ---------------------------------------------------------*/
 function SecurityLogSection() {
   const { user } = useUser();
   const [events, setEvents] = useState<(SecurityEvent & { id: string })[]>([]);
@@ -888,9 +882,6 @@ function SecurityLogSection() {
   );
 }
 
-/* -----------------------------------------------------------
- * SICHERHEIT: Schlüssel-Backup (optional, passphrase-verschlüsselt)
- * ---------------------------------------------------------*/
 function KeyBackupSection() {
   const { user } = useUser();
   const { showToast } = useToast();
@@ -996,9 +987,6 @@ function KeyBackupSection() {
   );
 }
 
-/* -----------------------------------------------------------
- * KONTO: Benutzername ändern
- * ---------------------------------------------------------*/
 function UsernameSection() {
   const { user } = useUser();
   const { showToast } = useToast();
@@ -1113,9 +1101,6 @@ function UsernameSection() {
   );
 }
 
-/* -----------------------------------------------------------
- * KONTO: Sitzungen/Geräte
- * ---------------------------------------------------------*/
 function SessionsSection() {
   const { sessions, currentSessionId, endSession, staySignedIn, setStaySignedIn } =
     useSession();

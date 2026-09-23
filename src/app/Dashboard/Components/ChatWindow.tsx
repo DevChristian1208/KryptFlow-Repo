@@ -109,7 +109,6 @@ export default function ChatWindow() {
     }
   }, [activeChannel?.id, unreadMentionsByChannel, markChannelMentionsRead]);
 
-  /* AVATARS */
   const topAvatars = useMemo(() => members.slice(0, 4), [members]);
 
   function scrollToBottom(force: boolean) {
@@ -148,9 +147,6 @@ export default function ChatWindow() {
     [channelMessages, q]
   );
 
-  /* -------------------------------------------------------
-   * DIRECT MESSAGES VIEW
-   * ----------------------------------------------------- */
   if (activeDMUserId && activeDMUser) {
     return (
       <div className="panel-surface flex-1 min-h-0 h-full flex flex-col overflow-hidden">
@@ -284,9 +280,6 @@ export default function ChatWindow() {
     );
   }
 
-  /* -------------------------------------------------------
-   * CHANNEL CHAT VIEW
-   * ----------------------------------------------------- */
   if (activeChannel) {
     return (
       <>
@@ -490,9 +483,6 @@ export default function ChatWindow() {
     );
   }
 
-  /* -------------------------------------------------------
-   * FALLBACK SCREEN
-   * ----------------------------------------------------- */
   return (
     <div className="panel-surface flex-1 h-full p-8 sm:p-10 flex items-center justify-center text-center overflow-hidden">
       <div>
