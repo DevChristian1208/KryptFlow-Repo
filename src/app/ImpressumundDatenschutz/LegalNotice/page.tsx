@@ -77,16 +77,22 @@ export default function LegalNotice() {
 
             <h2>Haftung für Inhalte</h2>
             <p>
-              Als Diensteanbieter bin ich gemäß § 7 Abs. 1 TMG für eigene
-              Inhalte auf diesen Seiten nach den allgemeinen Gesetzen
-              verantwortlich. Nach §§ 8–10 TMG bin ich jedoch nicht
-              verpflichtet, übermittelte oder gespeicherte fremde Informationen
-              zu überwachen oder nach Umständen zu forschen, die auf eine
-              rechtswidrige Tätigkeit hinweisen. Verpflichtungen zur Entfernung
-              oder Sperrung der Nutzung von Informationen nach den allgemeinen
-              Gesetzen bleiben hiervon unberührt. Eine diesbezügliche Haftung
-              ist jedoch erst ab dem Zeitpunkt der Kenntnis einer konkreten
-              Rechtsverletzung möglich.
+              Als Diensteanbieter bin ich für eigene Inhalte auf diesen Seiten
+              nach den allgemeinen Gesetzen verantwortlich. Für von Nutzern
+              eingestellte fremde Inhalte (z. B. Chat-Nachrichten) gilt die
+              Haftungsprivilegierung nach § 7 des Digitale-Dienste-Gesetzes
+              (DDG) in Verbindung mit Art. 6 der Verordnung (EU) 2022/2065
+              (Digital Services Act, &bdquo;DSA&ldquo;): Eine Verantwortlichkeit besteht
+              erst ab dem Zeitpunkt der Kenntnis einer konkreten
+              Rechtsverletzung. Nach § 7 DDG i. V. m. Art. 8 DSA besteht keine
+              allgemeine Verpflichtung, übermittelte oder gespeicherte
+              Informationen zu überwachen oder aktiv nach Umständen zu
+              forschen, die auf eine rechtswidrige Tätigkeit hinweisen. Für
+              Ende-zu-Ende-verschlüsselte Nachrichteninhalte besteht für mich
+              als Betreiber technisch ohnehin keine Möglichkeit der
+              Kenntnisnahme. Verpflichtungen zur Entfernung oder Sperrung der
+              Nutzung von Informationen nach den allgemeinen Gesetzen bleiben
+              hiervon unberührt.
             </p>
 
             <h2>Haftung für Links</h2>

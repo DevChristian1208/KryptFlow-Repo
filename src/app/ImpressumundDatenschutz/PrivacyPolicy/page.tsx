@@ -255,6 +255,20 @@ export default function PrivacyPolicy() {
                 <em>Rechtsgrundlage:</em> Art. 6 Abs. 1 lit. b DSGVO.
               </li>
             </ul>
+            <p>
+              <strong>Pflicht zur Bereitstellung:</strong> Die Angabe deiner
+              E-Mail-Adresse ist für die Registrierung eines vollständigen
+              Kontos erforderlich; ohne sie ist keine Registrierung möglich.
+              Alternativ kannst du Cryptflow vollständig ohne Angabe
+              personenbezogener Daten im eingeschränkten Gast-Modus nutzen
+              (siehe Abschnitt 3). Weitere Angaben wie Profilbild oder
+              Benutzername sind freiwillig.
+            </p>
+            <p>
+              <strong>Automatisierte Entscheidungsfindung:</strong> Es findet
+              keine automatisierte Entscheidungsfindung einschließlich
+              Profiling im Sinne von Art. 22 DSGVO statt.
+            </p>
 
             <h2 id="hosting-logs">5. Hosting &amp; Server-Logs</h2>
             <p>
